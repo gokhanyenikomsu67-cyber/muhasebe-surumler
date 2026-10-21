@@ -432,7 +432,7 @@ def excel_cekler(yon: str | None = None, durum: str | None = None, cari_id: int 
             kalin.add(len(satirlar))
             satirlar.append([ad] + [None] * 18 + [round(sum(float(c.tutar) for c in cekler if c.yon == y), 2), None])
     return _excel("Çekler", ["Yön", "Tür", "Durum", "Alış / Veriliş", "Vade", "Vade Günü", "Kalan Gün", "İşlem / Ödendiği Tarih",
-                             "Çek No", "Banka", "Şube", "Çeki Yazan Firma", "Çeki Yazan VKN", "Lehtar", "Cari", "Ciro Edilen", "Banka Hesabı", "Şantiye", "Özel Kod",
+                             "Çek No", "Banka", "Şube", "Çeki Yazan Firma", "Çeki Yazan VKN", "Lehtar (çekin yazıldığı firma)", "Kimden Alındı / Kime Verildi", "Ciro Edilen", "Banka Hesabı", "Şantiye", "Özel Kod",
                              "Tutar", "Para Birimi"], satirlar, "cekler", kalin=kalin)
 
 
