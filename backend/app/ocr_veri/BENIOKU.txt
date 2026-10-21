@@ -1,0 +1,3 @@
+Tesseract dil verileri (tessdata_fast 4.1.0: tur, eng). Lisans: Apache License 2.0,
+https://github.com/tesseract-ocr/tessdata_fast . Resimden fatura okuma (ocr.py) bu klasörü kullanır;
+Tesseract programı ayrıca kurulur (baslat.bat ilk açılışta winget ile kurar).

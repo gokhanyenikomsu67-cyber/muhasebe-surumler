@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muhasebe</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <div id="giris-ekrani" hidden>
+    <div class="giris-kutu">
+      <h1>Muhasebe Programı</h1>
+      <form id="giris-formu">
+        <label class="kayit-alani" hidden>Şirket ünvanı <input name="sirket_unvan"></label>
+        <label class="kayit-alani" hidden>Adınız <input name="ad"></label>
+        <label>E-posta <input name="eposta" type="email" required autocomplete="username"></label>
+        <label>Şifre <input name="sifre" type="password" required autocomplete="current-password"></label>
+        <button class="dugme ana" type="submit">Giriş</button>
+        <div class="alt"><a id="kayit-gecis">Yeni şirket hesabı aç</a></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="uygulama" hidden>
+    <div class="baslik-cubugu">
+      <b>MUHASEBE</b><span id="sirket-adi"></span>
+      <span class="sag"><a id="hizli-ara" title="Hızlı arama (F3 / Ctrl+K)">🔍 Ara (F3)</a><span id="kullanici-adi"></span><a id="cikis">Çıkış</a></span>
+    </div>
+    <div class="arac-cubugu" id="arac-cubugu"></div>
+    <div class="govde">
+      <nav class="modul-paneli" id="modul-paneli"></nav>
+      <main class="calisma-alani">
+        <div class="sekmeler" id="sekmeler"></div>
+        <div class="sekme-icerik" id="sekme-icerik"></div>
+      </main>
+    </div>
+    <div class="durum-cubugu">
+      <span id="durum-mesaj">Hazır</span>
+      <span>Ins: Yeni</span><span>Enter: Değiştir</span><span>Del: Sil</span>
+      <span>F2: Kaydet</span><span>F3: Ara</span><span>F5: Yenile</span><span>F9: Excel</span><span>Esc: Kapat</span>
+      <span id="durum-tarih" style="margin-left:auto"></span>
+    </div>
+  </div>
+  <div id="bildirim"></div>
+  <script src="/web/app.js"></script>
+</body>
+</html>

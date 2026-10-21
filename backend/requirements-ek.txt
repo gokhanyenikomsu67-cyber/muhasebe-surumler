@@ -1,0 +1,5 @@
+# İsteğe bağlı paketler: kurulamazsa program yine açılır, yalnız ilgili özellik çalışmaz.
+# iPhone fotoğrafları (HEIC)
+pillow-heif~=1.8.1
+# Yazısı olmayan PDF ve fotoğraflarda e-Fatura / çek karekodu
+zxing-cpp~=3.1.1

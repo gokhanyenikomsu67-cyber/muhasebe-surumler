@@ -1,0 +1,8 @@
+# İsteğe bağlı: çekteki el yazısı vade ve tutarı bilgisayarda (internetsiz) okuyan model (PaddleOCR, ONNX).
+# Kurulamazsa program yine açılır; el yazısı alanlar boş ve kırmızı gelir, elle girilir.
+# rapidocr 3: 23 gerçek çeklik ölçümde eski rapidocr-onnxruntime 1.2.3'e göre doğru ve emin okunan tutar 5 -> 16,
+# vade 5 -> 18 (yanlış ama emin görünen alan 0). Model ilk açılışta bir kez indirilir.
+rapidocr==3.10.0
+# Model sonuçları kütüphane sürümüne göre değişebiliyor: denenen sürümler sabit (Python 3.12 ve üstü)
+onnxruntime==1.29.0; python_version >= "3.12"
+opencv-python-headless==5.0.0.93

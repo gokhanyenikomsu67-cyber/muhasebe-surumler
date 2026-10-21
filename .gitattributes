@@ -1,0 +1,2 @@
+*.bat text eol=crlf
+backend/app/surum.py export-subst
