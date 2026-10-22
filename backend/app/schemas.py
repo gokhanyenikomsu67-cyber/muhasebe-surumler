@@ -242,3 +242,5 @@ class HareketCikis(HareketGiris, Orm):
     ai_okuma: dict | None = None
     bagli_hareket_id: int | None = None
     sorun: str | None = None  # işlenemeyen satırın nedeni (kırmızı gösterilir)
+    karsi_hesap_id: int | None = None  # hesaplar arası transferin karşı hesabı
+    karsi_hesap_ad: str | None = None  # Cari sütununda gösterilir: "Hesaplar arası → Halkbank 1"

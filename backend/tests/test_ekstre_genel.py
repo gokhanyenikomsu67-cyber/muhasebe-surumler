@@ -81,6 +81,32 @@ def test_kendi_hesaplar_arasi_virman_eslesir_ve_cift_yazilmaz():
     for x in client.get("/api/banka-hesaplari", headers=h).json():
         assert x["mutabakat_farki"] == 0, x  # transfer iki hesapta da bir kez
     assert not [x for x in client.get("/api/hareketler", headers=h).json() if x.get("kaynak") == "esleme"]
+    # Cari sütununda karşı hesap adı yazar; Hesaplar Arası Transferler raporunda transfer bir kez
+    ad = {x["iban"]: x["ad"] for x in hesaplar.values()}
+    cikis = next(x for x in client.get("/api/hareketler", headers=h).json() if x["tur"] == "virman" and x["yon"] == "cikis")
+    assert cikis["karsi_hesap_ad"] == f"Hesaplar arası → {ad[b]}"
+    rapor = client.get("/api/raporlar/virmanlar", headers=h).json()
+    assert [(x["cikan_hesap"], x["giren_hesap"], x["tutar"]) for x in rapor] == [(ad[a], ad[b], 300)]
+    assert client.get("/api/excel/virmanlar", headers=h).status_code == 200
+
+
+def test_virmanin_karsi_hesabi_elle_degistirilir():
+    h = _kullanici()
+    a = iban("00012", "1000004")
+    _yukle(h, "a.csv", _csv(a, [("02.09.2026", -300, "-300,00", "HESAPLAR ARASI TRANSFER 12345")]))
+    x = _taslak(h)[0]
+    assert x["tur"] == "virman" and x["karsi_hesap_id"] is None and x["sorun"]
+    diger = client.post("/api/banka-hesaplari", json={"ad": "Deneme Vadesiz"}, headers=h).json()
+    assert client.put(f"/api/hareketler/{x['id']}/karsi-hesap", json={"karsi_hesap_id": x["banka_hesap_id"]}, headers=h).status_code == 400
+    r = client.put(f"/api/hareketler/{x['id']}/karsi-hesap", json={"karsi_hesap_id": diger["id"]}, headers=h)
+    assert r.status_code == 200 and r.json()["karsi_hesap_ad"] == "Hesaplar arası → Deneme Vadesiz" and not r.json()["sorun"]
+    client.post("/api/hareketler/onayla", json={"idler": [x["id"]]}, headers=h)
+    bakiye = lambda i: next(b for b in client.get("/api/banka-hesaplari", headers=h).json() if b["id"] == i)["bakiye"]  # noqa: E731
+    assert bakiye(diger["id"]) == 300
+    # Onaydan sonra değiştirilirse karşılık kaydı yeni hesaba taşınır
+    ucuncu = client.post("/api/banka-hesaplari", json={"ad": "Deneme Üç"}, headers=h).json()
+    assert client.put(f"/api/hareketler/{x['id']}/karsi-hesap", json={"karsi_hesap_id": ucuncu["id"]}, headers=h).status_code == 200
+    assert (bakiye(diger["id"]), bakiye(ucuncu["id"])) == (0, 300)
 
 
 def test_yeniden_yuklemede_onaylanmamis_satirlar_yeniden_okunur_ve_cari_secimi_ogrenilir():

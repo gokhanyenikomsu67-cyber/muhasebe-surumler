@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .. import ai, kart, kural, schemas
 from ..auth import aktif_kullanici, yazabilir
@@ -124,7 +124,26 @@ def hareket_cikis(h: Hareket) -> schemas.HareketCikis:
     s.banka_hesap_ad = h.banka_hesap.ad if h.banka_hesap else None
     s.santiye_ad = h.santiye.ad if h.santiye else None
     s.sorun = sorun(h)
+    s.karsi_hesap_id, s.karsi_hesap_ad = _karsi_hesap_adi(h)
     return s
+
+
+def _karsi_hesap_adi(h: Hareket) -> tuple[int | None, str | None]:
+    """Virmanda paranın gittiği/geldiği kendi hesabımız (eşleşmiş satırın hesabı, yoksa okunan karşı hesap);
+    nakit çekim/yatırmada kasa."""
+    if h.tur in ("nakit_cekim", "nakit_yatirma") and h.banka_hesap_id:
+        return None, "Nakit Kasa"
+    if h.tur != "virman":
+        return None, None
+    db = object_session(h)
+    if db is None or not h.id:
+        return None, None
+    es = db.get(Hareket, h.bagli_hareket_id) if h.bagli_hareket_id else \
+        db.scalars(select(Hareket).where(Hareket.bagli_hareket_id == h.id)).first()
+    hesap = es.banka_hesap if es is not None else (db.get(BankaHesabi, kid) if (kid := (h.ai_okuma or {}).get("karsi_hesap_id")) else None)
+    if hesap is None:
+        return None, None
+    return hesap.id, f"Hesaplar arası {'→' if h.yon == 'cikis' else '←'} {hesap.ad}"
 
 
 def muhtelif_cari_id(db: Session, sirket_id: int) -> int:
@@ -411,6 +430,83 @@ def hareket_toplu_guncelle(istek: TopluHareket, db: Session = Depends(get_db), k
         n += 1
     db.commit()
     return {"guncellenen": n}
+
+
+class KarsiHesapIstegi(BaseModel):
+    karsi_hesap_id: int | None = None
+
+
+@router.put("/hareketler/{hareket_id}/karsi-hesap", response_model=schemas.HareketCikis)
+def karsi_hesap_degistir(hareket_id: int, istek: KarsiHesapIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Hesaplar arası transferin karşı hesabı (paranın gittiği/geldiği kendi hesabımız) elle seçilir."""
+    h = sirket_kaydi(db, Hareket, hareket_id, k)
+    if h.tur != "virman":
+        raise HTTPException(400, "Karşı hesap yalnız hesaplar arası transferde seçilir.")
+    if h.kaynak == "esleme" and h.bagli_hareket_id:
+        raise HTTPException(400, ESLEME_UYARISI)
+    if h.durum == "iptal":
+        raise HTTPException(400, "İptal edilmiş hareket değiştirilemez; önce iptali geri alın.")
+    if istek.karsi_hesap_id is not None:
+        hedef = sirket_kaydi(db, BankaHesabi, istek.karsi_hesap_id, k)
+        if hedef.id == h.banka_hesap_id:
+            raise HTTPException(400, "Karşı hesap, hareketin kendi hesabından farklı olmalı.")
+    if (h.ai_okuma or {}).get("karsi_hesap_id") == istek.karsi_hesap_id:
+        return hareket_cikis(h)
+    h.ai_okuma = {**(h.ai_okuma or {}), "karsi_hesap_id": istek.karsi_hesap_id}
+    # Eski karşı hesaptaki eşleşme çözülür; onaylıysa yeni karşı hesapta yeniden aranır ya da yazılır
+    h.bagli_hareket_id = None
+    for b in db.scalars(select(Hareket).where(Hareket.bagli_hareket_id == h.id)):
+        if b.kaynak == "esleme":
+            db.delete(b)
+        else:
+            b.bagli_hareket_id = None
+    _elle_degisti(h)
+    esle(db, h)
+    db.commit()
+    return hareket_cikis(h)
+
+
+@router.get("/raporlar/virmanlar")
+def virman_raporu(baslangic: date | None = None, bitis: date | None = None, hesap_id: int | None = None,
+                  db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+    """Onaylı hesaplar arası transferler: her transfer bir satır (iki hesabın ekstresi de yüklüyse çift sayılmaz)."""
+    q = select(Hareket).where(Hareket.sirket_id == k.sirket_id, Hareket.durum == "onayli", Hareket.tur == "virman")
+    if baslangic:
+        q = q.where(Hareket.tarih >= baslangic)
+    if bitis:
+        q = q.where(Hareket.tarih <= bitis)
+    satirlar = list(db.scalars(q.order_by(Hareket.tarih, Hareket.id)))
+    adlar = {b.id: b.ad for b in db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id))}
+    eslerin = {x.id: x for x in satirlar}
+    es: dict[int, Hareket] = {}
+    for x in satirlar:
+        if x.bagli_hareket_id and x.bagli_hareket_id in eslerin:
+            es[x.id], es[x.bagli_hareket_id] = eslerin[x.bagli_hareket_id], x
+    sonuc = []
+    for x in satirlar:
+        if x.kaynak == "esleme":
+            continue
+        e = es.get(x.id)
+        if x.yon == "giris" and e is not None and e.kaynak != "esleme":
+            continue  # karşı hesabın ekstresindeki çıkış satırı bu transferi zaten gösterir
+        karsi = e.banka_hesap_id if e is not None else (x.ai_okuma or {}).get("karsi_hesap_id")
+        cikan, giren = (x.banka_hesap_id, karsi) if x.yon == "cikis" else (karsi, x.banka_hesap_id)
+        if hesap_id and hesap_id not in (cikan, giren):
+            continue
+        sonuc.append({"hareket_id": x.id, "tarih": x.tarih, "cikan_hesap": adlar.get(cikan, "Bilinmiyor"),
+                      "giren_hesap": adlar.get(giren, "Bilinmiyor"), "tutar": float(x.tutar), "aciklama": x.aciklama})
+    return sonuc
+
+
+@router.get("/excel/virmanlar")
+def excel_virmanlar(baslangic: date | None = None, bitis: date | None = None, hesap_id: int | None = None,
+                    db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+    from .raporlar import _excel
+    veri = virman_raporu(baslangic, bitis, hesap_id, db, k)
+    satirlar = [[x["tarih"], x["cikan_hesap"], x["giren_hesap"], x["tutar"], x["aciklama"]] for x in veri]
+    satirlar.append([None, None, "TOPLAM", round(sum(x["tutar"] for x in veri), 2), None])
+    return _excel("Hesaplar Arası Transferler", ["Tarih", "Çıkan hesap", "Giren hesap", "Tutar", "Açıklama"], satirlar,
+                  "hesaplar-arasi-transferler", {len(satirlar) - 1})
 
 
 def _taslagi_kaldir(db: Session, h: Hareket) -> None:

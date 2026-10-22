@@ -745,6 +745,45 @@ function depoRaporuAc() {
   });
 }
 
+function virmanRaporuAc() {
+  const filtre = { hesap: "", ay: "" };
+  const sorgu = () => {
+    const q = new URLSearchParams();
+    if (filtre.hesap) q.set("hesap_id", filtre.hesap);
+    if (filtre.ay) {
+      const [y, a] = filtre.ay.split("-").map(Number);
+      q.set("baslangic", `${filtre.ay}-01`);
+      q.set("bitis", `${filtre.ay}-${String(new Date(y, a, 0).getDate()).padStart(2, "0")}`);
+    }
+    return q.toString();
+  };
+  sekmeAc("rapor-virman", "Hesaplar Arası Transferler", {
+    async ciz(el) {
+      let hesaplar, satirlar;
+      try { [hesaplar, satirlar] = await Promise.all([api("/api/banka-hesaplari"), api(`/api/raporlar/virmanlar?${sorgu()}`)]); }
+      catch (e) { return bildir(e.message, true); }
+      const toplam = satirlar.reduce((t, r) => t + r.tutar, 0);
+      el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, "Hesaplar Arası Transferler"),
+          "Hesap:", h("select", { onchange: (e) => (filtre.hesap = e.target.value) },
+            [["", "— Tüm hesaplar —"], ...hesaplar.map((b) => [b.id, b.ad])].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre.hesap }, m))),
+          "Ay:", h("input", { type: "month", value: filtre.ay, onchange: (e) => (filtre.ay = e.target.value) }),
+          h("button", { class: "dugme ana", onclick: () => yenidenCiz() }, "Ara"),
+          h("button", { class: "dugme", onclick: () => { filtre.ay = ""; filtre.hesap = ""; yenidenCiz(); } }, "Temizle"),
+          h("button", { class: "dugme", onclick: () => this.excel() }, "Excel'e aktar (F9)")),
+        satirlar.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Tarih", "Çıkan hesap", "Giren hesap", "Tutar", "Açıklama"].map((b, i) => h("th", { class: i === 3 ? "sayi" : "" }, b)))),
+          h("tbody", {}, satirlar.map((r) => h("tr", {}, h("td", {}, tarih(r.tarih)), h("td", {}, r.cikan_hesap), h("td", {}, r.giren_hesap),
+            h("td", { class: "sayi" }, para(r.tutar)), h("td", { style: "white-space:normal;min-width:220px" }, r.aciklama || "")))),
+          h("tfoot", {}, h("tr", {}, h("td", { colspan: 3 }, "Toplam"), h("td", { class: "sayi" }, para(toplam)), h("td", {})))))
+          : h("p", {}, "Bu seçime uyan onaylı hesaplar arası transfer yok."),
+        ACIKLAMA("Onaylanmış transferler listelenir. İki hesabın ekstresi de yüklüyse transfer bir kez yazılır."));
+      durum(`${satirlar.length} transfer listelendi`);
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => indir(`/api/excel/virmanlar?${sorgu()}`, `hesaplar-arasi-transferler${filtre.ay ? "-" + filtre.ay : ""}.xlsx`),
+  });
+}
+
 // ---------------------------------------------------------------- faturalar
 function faturaListesiAc(yon) {
   const ad = yon === "gelen" ? "Alış Faturaları" : "Satış Faturaları";
@@ -2927,7 +2966,8 @@ function hareketListesiAc(hesap = null) {
       { alan: "tarih", baslik: "Tarih", tip: "tarih" }, { alan: "tur", baslik: "Tür", deger: (x) => HAREKET_TURLERI[x.tur] || x.tur },
       { alan: "giris", baslik: "Giriş", tip: "para", deger: (x) => (x.yon === "giris" ? x.tutar : null) },
       { alan: "cikis", baslik: "Çıkış", tip: "para", deger: (x) => (x.yon === "cikis" ? x.tutar : null) },
-      { alan: "cari_unvan", baslik: "Cari" }, { alan: "banka_hesap_ad", baslik: "Banka / Kasa", deger: (x) => x.banka_hesap_ad || (x.cek_id ? "Çek portföyü" : "Kasa") },
+      { alan: "cari_unvan", baslik: "Cari", deger: (x) => x.cari_unvan || x.karsi_hesap_ad || "" },
+      { alan: "banka_hesap_ad", baslik: "Banka / Kasa", deger: (x) => x.banka_hesap_ad || (x.cek_id ? "Çek portföyü" : "Kasa") },
       { alan: "santiye_ad", baslik: "Şantiye" }, { alan: "aciklama", baslik: "Açıklama" },
       ...(hesap ? [{ alan: "bakiye", baslik: "Bakiye", tip: "para" },
         { alan: "durum", baslik: "Durum", deger: (x) => (x.durum === "onayli" ? "Onaylı" : h("span", { class: "negatif" }, x.durum === "iptal" ? "İptal" : "Onay bekliyor")),
@@ -2999,7 +3039,7 @@ function kasaAc() {
       { alan: "tarih", baslik: "Tarih", tip: "tarih" }, { alan: "tur", baslik: "Tür", deger: (x) => HAREKET_TURLERI[x.tur] || x.tur },
       { alan: "giris", baslik: "Giriş", tip: "para", deger: (x) => (x.yon === "giris" ? x.tutar : null) },
       { alan: "cikis", baslik: "Çıkış", tip: "para", deger: (x) => (x.yon === "cikis" ? x.tutar : null) },
-      { alan: "cari_unvan", baslik: "Cari" }, { alan: "aciklama", baslik: "Açıklama" },
+      { alan: "cari_unvan", baslik: "Cari", deger: (x) => x.cari_unvan || x.karsi_hesap_ad || "" }, { alan: "aciklama", baslik: "Açıklama" },
     ],
     yeni: () => hareketFormAc(null, null, { yon: "cikis", tur: "odeme" }),
     ac: (x) => (x.kaynak === "esleme" ? bildir("Bu satır bankadaki nakit çekimden gelir; bankadaki hareketi değiştirin.") : hareketFormAc(x)),
@@ -3129,6 +3169,19 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
       };
       // Cari hücresi: adın bir kısmı yazılarak aranır; yoksa yazılan adla (benzer ad/VKN sorularak) yeni cari açılır.
       const cariHucresi = (x) => {
+        if (x.tur === "nakit_cekim" || x.tur === "nakit_yatirma") return h("td", {}, "Nakit Kasa");
+        if (x.tur === "virman") {
+          // Hesaplar arası transfer: cari yerine paranın gittiği/geldiği kendi hesabımız seçilir
+          const hesaplar = sec.hesaplar.filter((b) => b.id !== x.banka_hesap_id).map((b) => [b.id, b.ad]);
+          const ks = secim([["", "— Karşı hesap seçin —"], ...hesaplar], x.karsi_hesap_id, async (e) => {
+            try {
+              Object.assign(x, await api(`/api/hareketler/${x.id}/karsi-hesap`, { metod: "PUT", veri: { karsi_hesap_id: Number(e.target.value) || null } }));
+              durum("Karşı hesap güncellendi"); yenidenCiz();
+            } catch (err) { bildir(err.message, true); }
+          });
+          return h("td", { class: "cari-hucre" }, h("div", { style: "font-size:12px;color:var(--soluk,#666)" },
+            x.yon === "cikis" ? "Bankadan bankaya transfer, giden hesap:" : "Bankadan bankaya transfer, gelen hesap:"), ks);
+        }
         const sel = secim(secenekListesi(sec.cariler, "unvan", "— Cari yok —"), x.cari_id, (e) => kaydetSatir(x, "cari_id", Number(e.target.value) || null));
         const td = h("td", { class: "cari-hucre" }, sel);
         cariAramali(sel, sec.cariler, { tur: x.yon === "giris" ? "musteri" : "tedarikci" });
@@ -3856,7 +3909,7 @@ const MODULLER = [
     ["Çek / Senet Raporları", cekRaporuAc], ["Vadesi Gelen Çekler", () => vadeBildirimiKontrol(true, true)]]],
   ["Banka / Kasa", [["Banka Hesapları", bankaHesaplariAc], ["Nakit Kasa", kasaAc], ["Ekstre Yükle", () => ekstreYukleAc()],
     ["Kredi Kartı Ekstresi Yükle", () => ekstreYukleAc("kart")], ["Onay Bekleyen Hareketler", taslakHareketlerAc],
-    ["Tahsilat / Ödeme", hareketListesiAc], ["Mutabakat", mutabakatAc]]],
+    ["Tahsilat / Ödeme", hareketListesiAc], ["Hesaplar Arası Transferler", virmanRaporuAc], ["Mutabakat", mutabakatAc]]],
   ["Mali Raporlar", [["KDV Özeti", kdvOzetiAc], ["Tevkifat Raporu", tevkifatRaporuAc], ["Stopaj Raporu", stopajRaporuAc], ["Ba-Bs Formları", babsAc], ["Gelir-Gider Tablosu", gelirGiderAc],
     ["Yaşlandırma (Vade Analizi)", yaslandirmaAc]]],
   ["Araçlar", [["Excel İşlemleri", excelIslemleriAc], ["Yedekler", yedeklerAc], ["Firma Bilgileri", firmaBilgileriAc], ["Kullanıcılar", kullanicilarAc], ["Değişiklik Geçmişi", () => gecmisAc()],
