@@ -643,7 +643,7 @@ def pdf_taraflari(metin: str) -> tuple[dict, dict]:
     satici, alici = taraf(satici_i), taraf(alici_i)
     if isaret is not None and alici_i is not None and alici_i[0] > isaret:
         # "SAYIN" bloğunda ad ilk satırdadır. VKN'den geriye yürüyerek ad bulunamadıysa ya da şirket eki taşımayan bir
-        # kurum adı ("ELMALI KÖYÜ MUHTARLIĞI", "... ORGANİZE SANAYİ BÖLGESİ") atlandıysa ad oradan alınır.
+        # kurum adı ("ÖRNEK KÖYÜ MUHTARLIĞI", "... ORGANİZE SANAYİ BÖLGESİ") atlandıysa ad oradan alınır.
         ileri = _sayin_sonrasi_ad(satirlar, isaret, alici_i[0])
         if ileri and (not alici["unvan"] or kotu_unvan(alici["unvan"])
                       or (not SIRKET_EKLERI.search(sade(alici["unvan"])) and _KAMU.search(sade(ileri))
@@ -2064,7 +2064,7 @@ SIRKET_EKLERI = re.compile(r"\b(ltd|sti|limited|sirket|a\.?s\b|anonim|tic\b|tica
 _KAMU = re.compile(r"^t\.? ?c\.? |\b(bakanligi|baskanligi|belediyesi|valiligi|kaymakamligi|universitesi|genel mudurlugu|"
                    r"bolge mudurlugu|il mudurlugu|ilce mudurlugu|kurumu|idaresi|muhtarligi|organize sanayi bolgesi|"
                    r"sanayi bolgesi|kooperatifi|birligi|odasi|dernegi|vakfi|okulu|mudurlugu|cemiyeti|sendikasi)\b")
-# Kurum adının içindeki yer adı adres sayılmaz: "ELMALI KÖYÜ MUHTARLIĞI", "YENİ MAHALLESİ MUHTARLIĞI"
+# Kurum adının içindeki yer adı adres sayılmaz: "ÖRNEK KÖYÜ MUHTARLIĞI", "YENİ MAHALLESİ MUHTARLIĞI"
 _KAMU_BIRIMI = re.compile(r"\b(mudurluk|mudurlugu|sube|subesi|koy|koyu|mahallesi|beldesi|osb)\b")
 
 

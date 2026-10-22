@@ -16,13 +16,13 @@ def satis_pdf(alici):
 
 MUHTARLIK = ["ORNEKLI KOYU MUHTARLIGI MERKEZ", "MERKEZ ORNEKLI KOYU 2", "Kutahya Merkez/ Kutahya", "E-Posta:", "Tel:",
              "Vergi Dairesi: ORNEK VERGI DAIRESI MUD.", "VKN: 3300000001"]
-OSB = ["KUTAHYA 30 AGUSTOS ORGANIZE SANAYI BOLGESI", "-", "/", "E-Posta:", "Tel:", "Vergi Dairesi: bilinmiyor",
+OSB = ["ORNEKKENT ORGANIZE SANAYI BOLGESI", "-", "/", "E-Posta:", "Tel:", "Vergi Dairesi: bilinmiyor",
        "VKN: 6000000002", "MUSTERINO: 6000000002"]
 SIRKET = ["ORNEK ENERJI SANAYI VE TICARET ANONIM", "SIRKETI", "-", "/", "E-Posta:", "Vergi Dairesi: ORNEK", "VKN: 1200000003"]
 
 
 def test_sayin_blogundaki_kurum_adi_cari_adi_olur():
-    beklenen = {"ORNEKLI KOYU MUHTARLIGI MERKEZ": MUHTARLIK, "KUTAHYA 30 AGUSTOS ORGANIZE SANAYI BOLGESI": OSB,
+    beklenen = {"ORNEKLI KOYU MUHTARLIGI MERKEZ": MUHTARLIK, "ORNEKKENT ORGANIZE SANAYI BOLGESI": OSB,
                 "ORNEK ENERJI SANAYI VE TICARET ANONIM SIRKETI": SIRKET}
     for ad, alici in beklenen.items():
         _, a = kural.pdf_taraflari(kural.pdf_metni(satis_pdf(alici)))
