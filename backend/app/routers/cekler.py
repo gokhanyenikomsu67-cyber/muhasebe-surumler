@@ -510,7 +510,7 @@ class CariDurumuIstegi(BaseModel):
 
 
 @router.post("/cari-durumu")
-def cari_durumu(istek: CariDurumuIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+def cari_durumu(istek: CariDurumuIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     """Toplu girişte her satırın hangi cariye işleneceği: kayıtlı cari (VKN ya da aynı ad, ekler yok sayılır),
     yoksa yeni açılacak; adı benzeyen kayıtlı cariler öneri olarak döner ("Bu mu?")."""
     from .temel import benzer_cariler
