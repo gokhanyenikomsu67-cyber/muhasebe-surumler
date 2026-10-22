@@ -255,3 +255,5 @@ table.liste tr.tiklanir { cursor: pointer; }
 .vade-pencere h3 { margin: 0 0 8px; color: #c62828; font-size: 16px; }
 .vade-pencere .dugmeler { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .toplu-cek .santiye-hucre { min-width: 200px; }
+.red-kutu { flex-wrap: wrap; background: #fdecea; border: 1px solid #e3a59f; padding: 8px; border-radius: 4px; margin: 6px 0; }
+.red-kutu .tablo-kap { flex-basis: 100%; }

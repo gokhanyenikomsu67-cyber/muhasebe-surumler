@@ -1794,7 +1794,55 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
         "notlar": notlar,
         "kalemler_okunamadi": not cozuldu,
         "okuma_yontemi": "Resimden metin tanıma" if resimden else "PDF metni",
+        "ettn": ettn_bul(metin),
+        "red_isareti": red_isareti(metin),
     }
+
+
+# --- Reddedilen / iptal edilen faturalar ------------------------------------------------------
+
+_ETTN = re.compile(r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b", re.IGNORECASE)
+# Portalın ya da entegratörün belgeye bastığı damga/yazı: "REDDEDİLDİ", "Fatura iptal edilmiştir", tek başına "RED".
+# "Kredi", "EDENRED" gibi kelimelerin içi sayılmaz: tam kelime ya da satırın tamamı aranır.
+_RED_YAZISI = re.compile(r"\b(?:reddedildi|reddedilmistir|reddedilen fatura|red edildi|red edilmistir|"
+                         r"iptal edildi|iptal edilmistir|iptal edilen fatura)\b")
+_RED_SATIRI = re.compile(r"^(?:red|ret|iptal|reddedildi|iptal edildi|reddedilmistir|iptal edilmistir)[.!]?$")
+
+
+def ettn_bul(metin: str) -> str | None:
+    """Faturanın ETTN'si (UUID): yazının içinde 'ETTN' etiketinden sonra ya da metindeki ilk UUID."""
+    m = re.search(r"ETTN\W{0,5}" + _ETTN.pattern[2:-2], metin or "", re.IGNORECASE) or _ETTN.search(metin or "")
+    return m.group(1).lower() if m else None
+
+
+def red_isareti(metin: str) -> bool:
+    """Faturanın üstünde reddedildiğini / iptal edildiğini söyleyen yazı ya da damga var mı."""
+    s = sade(metin or "")
+    if _RED_YAZISI.search(s):
+        return True
+    return any(_RED_SATIRI.match(sade(sa)) for sa in (metin or "").splitlines())
+
+
+_RED_KODLARI = {"red", "ret", "rejected", "reject", "reddedildi", "iptal"}
+
+
+def red_yanitlari(veri: bytes) -> set[str] | None:
+    """e-Fatura yanıt belgesi (ApplicationResponse): RED ise reddedilen faturaların ETTN/numaraları; yanıt belgesi değilse None."""
+    try:
+        kok = ET.fromstring(veri)
+    except ET.ParseError:
+        return None
+    if _yerel(kok.tag) != "ApplicationResponse":
+        return None
+    reddedilen = set()
+    for yanit in _hepsi(kok, "DocumentResponse"):
+        kod = sade(_metin(yanit, "Response", "ResponseCode") or "")
+        if kod in _RED_KODLARI:
+            ref = _bul(yanit, "DocumentReference")
+            for alan in ("UUID", "ID"):
+                if d := _metin(ref, alan):
+                    reddedilen.add(d.lower())
+    return reddedilen
 
 
 # --- Banka ekstresi -------------------------------------------------------

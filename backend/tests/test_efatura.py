@@ -37,7 +37,7 @@ def ubl(no="ORN2026000000001", satici_vkn="1234567890", alici_vkn="9999999999", 
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
- <cbc:ID>{no}</cbc:ID><cbc:UUID>3f1c0a2e-0000-4000-8000-000000000001</cbc:UUID>
+ <cbc:ID>{no}</cbc:ID><cbc:UUID>3f1c0a2e-0000-4000-8000-{no[-12:].lower()}</cbc:UUID>
  <cbc:IssueDate>2026-09-15</cbc:IssueDate><cbc:InvoiceTypeCode>{tip}</cbc:InvoiceTypeCode>
  <cbc:DocumentCurrencyCode>TRY</cbc:DocumentCurrencyCode>{ek}
  <cac:AccountingSupplierParty><cac:Party>

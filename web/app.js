@@ -1027,7 +1027,7 @@ const okunuyorYazisi = () => (OKUMA_YONTEMI === "ai" ? "Yapay zeka okuyor…" : 
 
 // Toplu okumanın durumu sekmeden bağımsız tutulur: başka sekmeye geçip dönünce, sekme kapanıp açılınca ya da
 // sayfa yenilenince dosyaların sonucu kaybolmaz (biten dosyalar bu tarayıcıda saklanır).
-const OKUMA = { yon: "gelen", yuklemeler: [], secili: new Set(), bekleyen: 0, kuyruk: [], calisan: 0, ayrinti: false,
+const OKUMA = { yon: "gelen", yuklemeler: [], secili: new Set(), bekleyen: 0, kuyruk: [], calisan: 0, ayrinti: false, redler: [],
   cizZamani: 0, kayitZamani: 0, gorunum: null };
 const OKUMA_ANAHTARI = () => `okuma-yuklemeleri-${BEN?.eposta || ""}`;
 function okumaDurumunuYukle() {
@@ -1091,6 +1091,54 @@ function aiOkumaAc() {
         "ya da tıklayıp seçin. Yüzlerce dosya bir seferde yüklenebilir; aynı fatura ikinci kez eklenmez. e-Fatura XML veya ZIP (en doğru sonuç; içindeki PDF/HTML görüntü olarak eklenir), PDF",
         BEN.ocr_var || BEN.ai_var ? ", fotoğraf ya da taranmış fatura (JPG, PNG, HEIC, TIFF)" : "", ".");
       const klasorDugme = h("button", { type: "button", class: "dugme", onclick: () => klasorGirdi.click() }, "Klasör seç (alt klasörler dahil)");
+      // Karşı tarafın reddettiği faturalar (portaldan indirilen PDF/XML): kaydedilmez, listeye girer; kayıtlıysa iptal önerilir
+      const redGirdi = h("input", { type: "file", multiple: true, accept: ".xml,.zip,application/pdf,image/*", hidden: true,
+        onchange: (e) => { yukle([...e.target.files], true); e.target.value = ""; } });
+      const redDugme = h("button", { type: "button", class: "dugme", title: "Reddedilmiş ya da iptal edilmiş faturaları seçin: kaydedilmez, sonra yüklense de atlanır; programda kayıtlıysa iptal etmeniz önerilir",
+        onclick: () => redGirdi.click() }, "Reddedilen faturaları yükle");
+      const redKutu = h("div", { class: "yukleme-ozet red-kutu", hidden: true });
+      const redListeKutu = h("div", { class: "yukleme-ozet red-kutu", hidden: true });
+      const redIptal = async (idler) => {
+        if (!confirm(`${idler.length} fatura reddedildiği için iptal edilsin mi? (Silinmez; bakiyeden ve raporlardan düşer.)`)) return;
+        try {
+          const r = await api("/api/reddedilen-faturalar/iptal-et", { metod: "POST", veri: { idler } });
+          bildir(`${r.iptal_edilen} fatura iptal edildi.`);
+          OKUMA.redler.forEach((x) => { if (idler.includes(x.kayitli_id)) { x.kayitli_id = null; x.iptal_edilmis = true; } });
+          redCiz();
+          if (!redListeKutu.hidden) redListesi();
+          listeyiTazele(`faturalar-${yon}`);
+        } catch (e) { bildir(e.message, true); }
+      };
+      const redTablo = (satirlar, islem) => h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+        h("thead", {}, h("tr", {}, ["Fatura No", "Tarih", "Cari", "Tutar", "Durum", ""].map((b, i) => h("th", { class: i === 3 ? "sayi" : "" }, b)))),
+        h("tbody", {}, satirlar.map((r) => h("tr", {}, h("td", {}, r.fatura_no || ""), h("td", {}, tarih(r.tarih)),
+          h("td", { style: "white-space:normal" }, r.cari_unvan || ""), h("td", { class: "sayi" }, para(r.genel_toplam)),
+          h("td", {}, r.durum || (r.kayitli_id ? "Programda kayıtlı" : r.iptal_edilmis ? "İptal edildi" : r.taslak_silindi ? "Onay listesinden çıkarıldı" : "Kaydedilmedi")),
+          h("td", {}, r.kayitli_id ? h("button", { class: "dugme tehlike", onclick: () => redIptal([r.kayitli_id]) }, "İptal et") : "", islem ? islem(r) : ""))))));
+      function redCiz() {
+        const r = OKUMA.redler;
+        redKutu.hidden = !r.length;
+        if (!r.length) return redKutu.replaceChildren();
+        const kayitli = r.filter((x) => x.kayitli_id).map((x) => x.kayitli_id);
+        redKutu.replaceChildren(
+          h("b", {}, `${r.length} fatura reddedilmiş olduğu için yüklenmedi.`),
+          kayitli.length ? h("span", {}, ` ${kayitli.length} tanesi programda kayıtlı; iptal etmeniz önerilir. `) : "",
+          kayitli.length > 1 ? h("button", { class: "dugme tehlike", onclick: () => redIptal(kayitli) }, `Kayıtlı olanların hepsini iptal et (${kayitli.length})`) : "",
+          h("button", { class: "dugme", onclick: () => { OKUMA.redler = []; redCiz(); } }, "Kapat"),
+          redTablo(r));
+      }
+      async function redListesi() {
+        let r;
+        try { r = await api("/api/reddedilen-faturalar"); } catch (e) { return bildir(e.message, true); }
+        redListeKutu.hidden = false;
+        redListeKutu.replaceChildren(h("b", {}, `Reddedilen faturalar listesi (${r.length})`),
+          h("button", { class: "dugme", onclick: () => { redListeKutu.hidden = true; } }, "Kapat"),
+          r.length ? redTablo(r, (x) => h("button", { class: "dugme", title: "Yanlışlıkla listeye girdiyse çıkarın; sonra normal yüklenir",
+            onclick: async () => { if (!confirm(`${x.fatura_no} reddedilenler listesinden çıkarılsın mı?`)) return;
+              await api(`/api/reddedilen-faturalar/${x.id}`, { metod: "DELETE" }); redListesi(); } }, "Listeden çıkar"))
+            : h("p", {}, "Listede fatura yok."));
+      }
+      const redListeDugme = h("button", { type: "button", class: "dugme", onclick: () => (redListeKutu.hidden ? redListesi() : (redListeKutu.hidden = true)) }, "Reddedilenler listesi");
       // Toplu yükleme bitince: kaç fatura sorunsuz, kaçı hangi nedenle sorunlu
       const raporKutu = h("div", { class: "yukleme-ozet", hidden: true });
       async function raporOzeti() {
@@ -1139,25 +1187,37 @@ function aiOkumaAc() {
       };
       const tablo = h("div");
       // Aynı anda en çok 4 dosya okunur (okumaSiradaki); yüzlerce dosyada sunucu ve tarayıcı tıkanmaz.
-      async function yukle(dosyalar) {
+      async function yukle(dosyalar, red = false) {
         dosyalar = dosyalar.filter((d) => /\.(pdf|xml|zip|jpe?g|png|webp|heic|heif|tiff?|bmp)$/i.test(d.name));
         if (!dosyalar.length) return bildir("Seçilenlerde fatura dosyası (PDF, XML, ZIP) yok.", true);
         for (const d of dosyalar) {
           const y = { ad: d.webkitRelativePath || d.name, durum: "Sırada" };
           yuklemeler.unshift(y);
           OKUMA.bekleyen++;
-          OKUMA.kuyruk.push(() => oku(d, y, yon));
+          OKUMA.kuyruk.push(() => oku(d, y, yon, red));
         }
         cizYuklemeler();
         okumaSiradaki();
       }
       // Okuma bitince o an ekrandaki görünüm güncellenir (sekme değişmiş ya da yeniden açılmış olabilir).
-      function oku(d, y, yon) {
+      function oku(d, y, yon, red = false) {
           y.durum = okunuyorYazisi();
           const fd = new FormData();
           fd.append("dosya", d);
-          return api(`/api/faturalar/oku?yon=${yon}&yontem=${OKUMA_YONTEMI}`, { metod: "POST", dosya: fd })
-            .then((faturalar) => {
+          return api(`/api/faturalar/oku?yon=${yon}&yontem=${OKUMA_YONTEMI}${red ? "&reddedilen=true" : ""}`, { metod: "POST", dosya: fd })
+            .then((sonuc) => {
+              // Reddedilmiş faturalar kaydedilmedi: yükleme sonunda ayrı listede gösterilir
+              const redler = sonuc.filter((f) => f.reddedildi);
+              const faturalar = sonuc.filter((f) => !f.reddedildi);
+              for (const r of redler) {
+                const i = OKUMA.redler.findIndex((x) => x.fatura_no === r.fatura_no && x.cari_unvan === r.cari_unvan);
+                i >= 0 ? (OKUMA.redler[i] = r) : OKUMA.redler.push(r);
+              }
+              if (!faturalar.length) {
+                y.durum = red ? "Reddedilenler listesine eklendi, kaydedilmedi" : "Reddedilmiş fatura, yüklenmedi";
+                y.yeni = 0;
+                return;
+              }
               const u = faturalar.reduce((t, f) => t + (f.ai_okuma?.uyarilar?.filter((x) => x && !/okundu\.?$|yeni cari açıldı/.test(x)).length || 0), 0);
               const varolan = faturalar.filter((f) => f.zaten_var).length;
               const guncellenen = faturalar.filter((f) => !f.zaten_var && f.ai_okuma?.bilgi?.some((x) => x.includes("XML'iyle güncellendi"))).length;
@@ -1182,7 +1242,7 @@ function aiOkumaAc() {
               g.cizYuklemeler();
               // Yüzlerce dosyada tabloyu her dosyada değil, arada bir ve en sonda yenile.
               if (!OKUMA.bekleyen || Date.now() - OKUMA.cizZamani > 10000) { OKUMA.cizZamani = Date.now(); g.tabloyuCiz(); }
-              if (!OKUMA.bekleyen) g.raporOzeti();
+              if (!OKUMA.bekleyen) { g.raporOzeti(); g.redCiz(); }
             });
       }
 
@@ -1321,8 +1381,10 @@ function aiOkumaAc() {
           : BEN.ai_var
           ? "XML ve metinli PDF'ler yapay zekasız okunur. Resim okuma programı kurulu değil; taranmış PDF ve fotoğraflar yapay zeka ile okunur."
           : "XML ve metinli PDF'ler yapay zekasız okunur. Resim okuma programı kurulu değil (baslat.bat ilk açılışta kurar); o zamana kadar fotoğraf ve taranmış PDF okunamaz."),
-        alanEl, girdi, klasorGirdi, h("div", { class: "liste-ust", style: "margin-top:6px" }, klasorDugme), raporKutu, tablo, liste));
-      OKUMA.gorunum = { cizYuklemeler, tabloyuCiz, raporOzeti };
+        alanEl, girdi, klasorGirdi, redGirdi, h("div", { class: "liste-ust", style: "margin-top:6px" }, klasorDugme, redDugme, redListeDugme),
+        redKutu, redListeKutu, raporKutu, tablo, liste));
+      OKUMA.gorunum = { cizYuklemeler, tabloyuCiz, raporOzeti, redCiz };
+      redCiz();
       cizYuklemeler();
       tabloyuCiz();
       raporOzeti();

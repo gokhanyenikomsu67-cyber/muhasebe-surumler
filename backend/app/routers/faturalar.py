@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .. import ai, karekod, kural, ocr, schemas, tani
 from ..auth import aktif_kullanici, yazabilir
 from ..db import VERI_KLASORU, get_db
-from ..models import GIDER_TURLERI, Cari, Fatura, FaturaKalem, Kullanici, Santiye, Sirket
+from ..models import GIDER_TURLERI, Cari, Fatura, FaturaKalem, Kullanici, RedFatura, Santiye, Sirket
 from ..yukleme import dosyayi_oku
 from .temel import sirket_kaydi
 
@@ -424,10 +424,14 @@ def _resimden_oku(icerik: bytes, pdf: bool, mime: str, yontem: str, santiye_adla
 XML_TURLERI = {"application/xml", "text/xml", "application/zip", "application/x-zip-compressed"}
 
 
-@router.post("/oku", response_model=list[schemas.FaturaCikis])
-def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomatik",
-        db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+@router.post("/oku")
+def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomatik", reddedilen: bool = False,
+        db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)) -> list[dict]:
     """Faturayı okur ve taslak olarak kaydeder.
+
+    Reddedilmiş/iptal edilmiş fatura (üstünde red yazısı, e-Fatura red yanıtı ya da reddedilenler listesinde) kaydedilmez;
+    yanıtta {"reddedildi": true, ...} olarak döner. reddedilen=True: yüklenen faturaların hepsi reddedilmiş sayılır
+    (portaldan indirilen reddedilen faturalar) ve reddedilenler listesine eklenir.
 
     yontem: otomatik | kural (yapay zekasız) | ai. e-Fatura XML (veya XML'li zip) her zaman
     yapay zekasız okunur. PDF önce metninden okunur; taranmış PDF ve fotoğraflar bilgisayardaki
@@ -440,7 +444,15 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
     adi_k = (dosya.filename or "").lower()
     if not adi_k.endswith((".xml", ".zip")):  # XML her zaman okunur: PDF'ten açılmış taslağı düzeltebilir
         if onceki := _ayni_dosya(db, k.sirket_id, ozet):
-            return [cikis(f) for f in onceki]
+            # Daha önce yüklenmiş dosya: sonradan reddedilenler listesine girdiyse kayıtlı fatura iptal için gösterilir
+            with KAYIT_KILIDI:
+                sonuc = []
+                for f in onceki:
+                    o = _faturadan_okunan(f)
+                    red = reddedilen or red_mi(db, k.sirket_id, o, f.yon)
+                    sonuc.append(_redde_isle(db, k, o, f.yon) if red else _cikis_json(f))
+                db.commit()
+            return sonuc
     santiyeler = db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id, Santiye.durum == "aktif")).all()
     santiye_adlari = [s.ad for s in santiyeler]
     adi = (dosya.filename or "").lower()
@@ -463,7 +475,7 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
         if adi.endswith((".xml", ".zip")) or mime in XML_TURLERI:
             parcalar = _xml_parcalari(icerik, adi, santiye_adlari)
             with KAYIT_KILIDI:
-                sonuc = _xml_kaydet(db, k, parcalar, yon, santiyeler, sirket, dosya.filename)
+                sonuc = _xml_kaydet(db, k, parcalar, yon, santiyeler, sirket, dosya.filename, reddedilen)
             tani.okundu(k.sirket_id, dosya.filename)
             return sonuc
         elif mime == "application/pdf" and yontem != "ai":
@@ -498,9 +510,12 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
 
     ad = _dosya_kaydet(icerik, adi.rsplit(".", 1)[-1][:5] if "." in adi else "bin")
 
-    faturalar = []
+    faturalar, redler = [], []
     with KAYIT_KILIDI:
         for okunan in okunanlar:
+            if reddedilen or red_mi(db, k.sirket_id, okunan, yon):
+                redler.append(_redde_isle(db, k, okunan, _yon_bul(okunan, yon, sirket.vkn)))
+                continue
             f = taslak_olustur(db, k, okunan, yon, santiyeler, dosya.filename)
             if getattr(f, "_zaten_var", False):  # aynı fatura zaten listede/kayıtlı: ikinci kez eklenmedi
                 if not f.kaynak_dosya or f.kaynak_dosya.endswith((".xml", ".zip")):
@@ -520,7 +535,87 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
             for f in faturalar:
                 db.refresh(f)
     tani.okundu(k.sirket_id, dosya.filename)
-    return [cikis(f) for f in faturalar]
+    return [_cikis_json(f) for f in faturalar] + redler
+
+
+def _cikis_json(f: Fatura) -> dict:
+    return cikis(f).model_dump(mode="json")
+
+
+def _karsi(okunan: dict, yon: str) -> dict:
+    return (okunan.get("satici") if yon == "gelen" else okunan.get("alici")) or {}
+
+
+def _faturadan_okunan(f: Fatura) -> dict:
+    """Kayıtlı faturanın red listesi için bilgileri (okunan sözlüğü biçiminde)."""
+    karsi = {"unvan": f.cari.unvan if f.cari else None, "vkn": f.cari.vkn if f.cari else None}
+    return {"fatura_no": f.fatura_no, "ettn": (f.ai_okuma or {}).get("ettn"), "tarih": f.tarih.isoformat() if f.tarih else None,
+            "genel_toplam": float(f.genel_toplam or 0), "satici" if f.yon == "gelen" else "alici": karsi}
+
+
+def _red_kaydi(db: Session, sirket_id: int, okunan: dict, yon: str) -> RedFatura | None:
+    """Reddedilenler listesinde bu fatura var mı: ETTN aynı, ya da numara aynı ve (biliniyorsa) karşı firmanın VKN'si aynı."""
+    ettn = (okunan.get("ettn") or "").lower() or None
+    if ettn and (r := db.scalar(select(RedFatura).where(RedFatura.sirket_id == sirket_id, RedFatura.ettn == ettn).limit(1))):
+        return r
+    no = okunan.get("fatura_no")
+    if not no:
+        return None
+    vkn = re.sub(r"\D", "", str(_karsi(okunan, yon).get("vkn") or ""))
+    for r in db.scalars(select(RedFatura).where(RedFatura.sirket_id == sirket_id, RedFatura.fatura_no == no)):
+        if not (ettn and r.ettn) and (not vkn or not r.vkn or r.vkn == vkn):
+            return r
+    return None
+
+
+def red_mi(db: Session, sirket_id: int, okunan: dict, yon: str, red_kimlikleri: set[str] = frozenset()) -> bool:
+    if okunan.get("red_isareti"):
+        return True
+    if red_kimlikleri and {(okunan.get("ettn") or "").lower(), (okunan.get("fatura_no") or "").lower()} & red_kimlikleri:
+        return True
+    return _red_kaydi(db, sirket_id, okunan, yon) is not None
+
+
+def _kayitli_fatura(db: Session, sirket_id: int, okunan: dict, yon: str) -> Fatura | None:
+    """Reddedilen faturanın programda kayıtlı (taslak/onaylı) karşılığı."""
+    no = okunan.get("fatura_no")
+    if not no:
+        return None
+    ettn = (okunan.get("ettn") or "").lower()
+    vkn = re.sub(r"\D", "", str(_karsi(okunan, yon).get("vkn") or ""))
+    for f in db.scalars(select(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.fatura_no == no).order_by(Fatura.id)):
+        f_ettn = ((f.ai_okuma or {}).get("ettn") or "").lower()
+        f_vkn = re.sub(r"\D", "", (f.cari.vkn if f.cari else "") or "")
+        if (ettn and f_ettn and ettn == f_ettn) or (not (ettn and f_ettn) and (not vkn or not f_vkn or vkn == f_vkn)):
+            return f
+    return None
+
+
+def _redde_isle(db: Session, k: Kullanici, okunan: dict, yon: str) -> dict:
+    """Reddedilen fatura kaydedilmez. Reddedilenler listesine eklenir; aynı fatura taslak olarak bekliyorsa silinir,
+    onaylıysa (deftere işlenmişse) iptal edilmesi önerilir (kayitli_id)."""
+    karsi = _karsi(okunan, yon)
+    vkn = re.sub(r"\D", "", str(karsi.get("vkn") or "")) or None
+    if vkn and vkn == re.sub(r"\D", "", db.get(Sirket, k.sirket_id).vkn or ""):
+        vkn = None
+    r = _red_kaydi(db, k.sirket_id, okunan, yon)
+    if r is None:
+        r = RedFatura(sirket_id=k.sirket_id, yon=yon, ettn=(okunan.get("ettn") or "").lower() or None,
+                      fatura_no=okunan.get("fatura_no"), vkn=vkn, unvan=(karsi.get("unvan") or "").strip() or None,
+                      tarih=_tarih(okunan.get("tarih")), tutar=okunan.get("genel_toplam") or 0)
+        db.add(r)
+        db.flush()
+    f = _kayitli_fatura(db, k.sirket_id, okunan, yon)
+    kayitli_id = taslak_silindi = None
+    if f is not None and f.durum == "taslak":
+        taslak_silindi = True
+        db.delete(f)
+    elif f is not None and f.durum == "onayli":
+        kayitli_id = f.id
+    unvan = r.unvan or (f.cari.unvan if f is not None and f.cari else None)
+    return {"reddedildi": True, "yon": yon, "fatura_no": r.fatura_no, "tarih": r.tarih.isoformat() if r.tarih else None,
+            "cari_unvan": unvan, "genel_toplam": float(r.tutar or 0), "kayitli_id": kayitli_id,
+            "taslak_silindi": bool(taslak_silindi), "iptal_edilmis": f is not None and f.durum == "iptal"}
 
 
 _OZETI_TAMAM: set[int] = set()
@@ -545,23 +640,43 @@ def _ayni_dosya(db: Session, sirket_id: int, ozet: str) -> list[Fatura]:
 
 
 def _xml_parcalari(icerik: bytes, adi: str, santiye_adlari) -> list[tuple[bytes, tuple | None, dict]]:
-    """e-Fatura XML'i ya da XML'li zip okunur (veritabanına dokunmadan): [(xml, görüntü, okunan)]."""
-    parcalar = kural.xml_ve_gorunumler(icerik, adi)
+    """e-Fatura XML'i ya da XML'li zip okunur (veritabanına dokunmadan): [(xml, görüntü, okunan)].
+
+    Zip'teki e-Fatura yanıt belgeleri (kabul/red) fatura değildir: RED yanıtının gösterdiği faturalar "red_isareti" alır."""
+    parcalar, red_kimlikleri, yanit_var = [], set(), False
+    for xml, gorunum in kural.xml_ve_gorunumler(icerik, adi):
+        yanit = kural.red_yanitlari(xml)
+        if yanit is not None:
+            red_kimlikleri |= yanit
+            yanit_var = True
+        else:
+            parcalar.append((xml, gorunum))
     if not parcalar:
+        if yanit_var:
+            raise kural.KuralHatasi("Bu dosya bir e-Fatura yanıtı (kabul/red); fatura yok. Faturanın kendisini yükleyin.")
         raise kural.KuralHatasi("Zip içinde e-Fatura XML dosyası bulunamadı.")
-    return [(xml, gorunum, kural.efatura_xml_oku(xml, santiye_adlari)) for xml, gorunum in parcalar]
+    sonuc = []
+    for xml, gorunum in parcalar:
+        okunan = kural.efatura_xml_oku(xml, santiye_adlari)
+        if red_kimlikleri & {(okunan.get("ettn") or "").lower(), (okunan.get("fatura_no") or "").lower()}:
+            okunan["red_isareti"] = True
+        sonuc.append((xml, gorunum, okunan))
+    return sonuc
 
 
 def _xml_kaydet(db: Session, k: Kullanici, parcalar, yon: str, santiyeler, sirket,
-                dosya_adi: str | None) -> list[schemas.FaturaCikis]:
+                dosya_adi: str | None, reddedilen: bool = False) -> list[dict]:
     """Okunan e-Faturalar: her fatura ayrı taslak olur; XML ve görüntüsü faturaya bağlanır.
 
     Aynı fatura daha önce PDF'ten okunduysa yeni taslak açılmaz: taslak XML'deki bilgilerle güncellenir,
     PDF görüntü olarak kalır.
     """
-    faturalar = []
+    faturalar, redler = [], []
     for xml, gorunum, okunan in parcalar:
         f_yon = _yon_bul(okunan, yon, sirket.vkn)
+        if reddedilen or red_mi(db, k.sirket_id, okunan, f_yon):
+            redler.append(_redde_isle(db, k, okunan, f_yon))
+            continue
         f = taslak_olustur(db, k, okunan, f_yon, santiyeler, dosya_adi)
         if getattr(f, "_zaten_var", False) and f.xml_dosya:
             faturalar.append(f)
@@ -573,7 +688,7 @@ def _xml_kaydet(db: Session, k: Kullanici, parcalar, yon: str, santiyeler, sirke
             f.kaynak_dosya = f.xml_dosya
         faturalar.append(f)
     db.commit()
-    return [cikis(f) for f in faturalar]
+    return [_cikis_json(f) for f in faturalar] + redler
 
 
 def karsi_tarafi_karekoddan(okunan: dict, icerik: bytes, sirket: Sirket, yon: str) -> dict:

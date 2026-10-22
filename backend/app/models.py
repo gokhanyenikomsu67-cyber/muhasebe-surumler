@@ -122,6 +122,21 @@ class Fatura(Base):
     )
 
 
+class RedFatura(Base):
+    """Karşı tarafça reddedilmiş / iptal edilmiş fatura: yüklemede kaydedilmez, kayıtlıysa iptal önerilir."""
+    __tablename__ = "reddedilen_faturalar"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    yon: Mapped[str] = mapped_column(String(10), default="gelen")
+    ettn: Mapped[str | None] = mapped_column(String(36), index=True)
+    fatura_no: Mapped[str | None] = mapped_column(String(50), index=True)
+    vkn: Mapped[str | None] = mapped_column(String(11))  # karşı firmanın
+    unvan: Mapped[str | None] = mapped_column(String(255))
+    tarih: Mapped[date | None] = mapped_column(Date)
+    tutar: Mapped[float] = mapped_column(Para, default=0)
+    olusturma: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class FaturaKalem(Base):
     __tablename__ = "fatura_kalemleri"
     id: Mapped[int] = mapped_column(primary_key=True)
