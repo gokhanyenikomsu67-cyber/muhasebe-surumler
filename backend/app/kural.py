@@ -236,6 +236,8 @@ def _vergiler(vergi_toplami_listesi) -> tuple[float, float, float | None]:
         for alt in altlar:
             kod = _vergi_kodu(alt)
             tutar = _sayi(alt, "TaxAmount") or 0
+            if kod in STOPAJ_KODLARI:
+                continue  # stopaj diğer vergi değildir: ödenecekten düşülür (_stopaj)
             if kod in (None, KDV_KODU):
                 kdv += tutar
                 if oran is None:
@@ -243,6 +245,20 @@ def _vergiler(vergi_toplami_listesi) -> tuple[float, float, float | None]:
             else:
                 diger += tutar
     return round(kdv, 2), round(diger, 2), oran
+
+
+STOPAJ_KODLARI = {"0003", "0011"}  # UBL-TR: gelir vergisi stopajı, kurumlar vergisi stopajı
+
+
+def _stopaj(vergi_toplami_listesi) -> tuple[float, float | None]:
+    """TaxTotal içindeki stopaj (0003/0011): (tutar, yüzde)."""
+    tutar, oran = 0.0, None
+    for t in vergi_toplami_listesi:
+        for alt in _hepsi(t, "TaxSubtotal"):
+            if _vergi_kodu(alt) in STOPAJ_KODLARI:
+                tutar += _sayi(alt, "TaxAmount") or 0
+                oran = oran or _sayi(alt, "Percent") or _sayi(alt, "TaxCategory", "Percent")
+    return round(tutar, 2), oran
 
 
 def _iskonto_orani(el) -> str:
@@ -299,6 +315,9 @@ def efatura_xml_oku(veri: bytes, santiyeler: list[str] | None = None) -> dict:
         satir_diger += diger
         satir_tevkifat += sum(_sayi(w, "TaxAmount") or 0 for w in _hepsi(satir, "WithholdingTaxTotal"))
         tevk_pay, tevk_kod = _xml_tevkifat(_hepsi(satir, "WithholdingTaxTotal"))
+        satir_stopaj, stopaj_yuzde = _stopaj(_hepsi(satir, "TaxTotal"))
+        if satir_stopaj and not stopaj_yuzde and tutar:
+            stopaj_yuzde = round(satir_stopaj / tutar * 100, 2)
         # Satır iskontosu: Price brüt, LineExtensionAmount net. Kayıtta tutar net olsun diye fiyat nete çevrilir.
         isk = _iskonto_orani(satir)
         if tutar is not None and (fiyat is None or abs(round(miktar * fiyat, 2) - tutar) > 0.01):
@@ -313,11 +332,14 @@ def efatura_xml_oku(veri: bytes, santiyeler: list[str] | None = None) -> dict:
             "kdv_orani": oran if oran is not None else 0,
             "tutar": tutar,
             **({"tevkifat_orani": tevk_pay, "tevkifat_kodu": tevk_kod} if tevk_pay and oran else {}),
+            **({"stopaj_orani": stopaj_yuzde} if satir_stopaj else {}),
             **({"kdv_tutari": satir_kdv} if tutar is not None and oran and abs(tutar * oran / 100 - satir_kdv) > 0.05 else {}),
         })
     toplam = _bul(kok, "LegalMonetaryTotal")
     tevkifat = sum(_sayi(w, "TaxAmount") or 0 for w in _hepsi(kok, "WithholdingTaxTotal")) or satir_tevkifat
     kdv, diger, _ = _vergiler(_hepsi(kok, "TaxTotal"))
+    stopaj, stopaj_yuzde = _stopaj(_hepsi(kok, "TaxTotal"))
+    stopaj = stopaji_dagit(kalemler, stopaj, stopaj_yuzde)
     if any("kdv_tutari" in k for k in kalemler) and abs(sum((k["tutar"] or 0) * k["kdv_orani"] / 100 for k in kalemler) - kdv) \
             <= abs(sum(kalem_kdv(k) for k in kalemler) - kdv):
         for k in kalemler:
@@ -378,6 +400,7 @@ def efatura_xml_oku(veri: bytes, santiyeler: list[str] | None = None) -> dict:
         "ara_toplam": ara,
         "kdv_toplam": kdv,
         "tevkifat": round(tevkifat, 2),
+        "stopaj": stopaj,
         "diger_vergiler": round(diger, 2),
         "genel_toplam": _sayi(toplam, "PayableAmount") if toplam is not None else None,
         "para_birimi": para,
@@ -701,6 +724,24 @@ def tevkifat_tutari(tutar: float, kdv_orani: float, pay: float, kdv_tutari: floa
     """Kalem tevkifatı = KDV x oran: 23.160,72 TL %20 KDV, 2/10 -> 926,43. Faturada yazan KDV tutarı varsa o esas."""
     kdv = float(kdv_tutari) if kdv_tutari is not None else float(tutar or 0) * float(kdv_orani or 0) / 100
     return round(kdv * float(pay or 0) / 10, 2)
+
+
+def stopaj_tutari(tutar: float, oran: float | None) -> float:
+    """Kalemin gelir/kurumlar vergisi stopajı: KDV hariç tutar x oran / 100."""
+    return round(float(tutar or 0) * float(oran or 0) / 100, 2)
+
+
+def stopaji_dagit(kalemler: list[dict], stopaj: float, oran: float | None) -> float:
+    """Faturadaki stopaj kalemlere oranıyla yazılır. Satırda oran okunduysa o geçerlidir; yalnız faturanın altında
+    yazıyorsa ve oran x kalemler tutuyorsa her kaleme o oran yazılır. Fatura stopajı (satırlardan ya da yazılandan) döner."""
+    satir = round(sum(stopaj_tutari(k["tutar"], k.get("stopaj_orani")) for k in kalemler), 2)
+    if satir:
+        return stopaj or satir
+    if stopaj and oran:
+        if abs(round(sum(stopaj_tutari(k["tutar"], oran) for k in kalemler), 2) - stopaj) <= 0.05 + 0.01 * len(kalemler):
+            for k in kalemler:
+                k["stopaj_orani"] = oran
+    return stopaj
 
 
 def kalem_kdv(k: dict) -> float:
@@ -1568,6 +1609,14 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
     if not tevk:  # tevkifat yalnız kalem satırında: "Tevkifat ( 619 - ... ) (% 70,00 )= 12.348,00 TL"
         tevk = round(sum(para_coz(m.group(1)) or 0 for m in re.finditer(
             r"tevkifat\s*\([^)]*\)\s*\(?\s*%\s*[\d.,]+\s*\)?\s*=\s*([\d.,]*\d)", s)), 2)
+    # Gelir/kurumlar vergisi stopajı ödenecek tutardan düşülür: "Hesaplanan STPJ(%5) 96.790,96",
+    # kalemde "GELİR VERGİSİ STOPAJI (%5,00)=96.790,96 TL"
+    stopaj_orani = None
+    stopaj = 0.0
+    if m := re.search(r"(?:hesaplanan\s*)?(?:stpj|stopaj\w*|gelir vergisi kesintisi)\s*\(?\s*%\s*([\d.,]+)\s*\)?\s*:?\s*([\d.,]*\d)(?!\s*%)(?!\s*\))", s):
+        stopaj_orani, stopaj = para_coz(m.group(1)), para_coz(m.group(2)) or 0.0
+        if m2 := re.search(r"(?:hesaplanan\s*)?(?:stpj|stopaj\w*)\s*\(\s*%\s*[\d.,]+\s*\)\s*=\s*([\d.,]*\d)", s):
+            stopaj = para_coz(m2.group(1)) or stopaj  # satırdaki "(%5,00)=96.790,96" biçimi
     odenecek = tutar(r"odenecek tutar", r"odenecek toplam")
     genel = odenecek if odenecek is not None else tutar(r"genel toplam", r"fatura toplami")
     if odenecek is None and genel is not None and iskonto and kdv is not None:
@@ -1575,7 +1624,7 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
         # ödenecek tutar sanılırsa cari borcu iskonto kadar fazla görünür.
         brut = mal_hizmet if mal_hizmet is not None else genel
         net = round(brut - iskonto, 2)
-        beklenen = round(net + kdv - tevk, 2)
+        beklenen = round(net + kdv - tevk - stopaj, 2)
         if abs(genel - brut) <= 0.05 and net > 0 and (ara is None or abs(ara - net) <= 0.05) and abs(genel - beklenen) > 0.05:
             sayilar = {para_coz(x) for x in re.findall(r"\d[\d.,]*\d", s)}
             if (any(abs(kdv - net * r / 100) <= 0.05 + 0.001 * kdv for r in (1, 8, 10, 18, 20))
@@ -1583,26 +1632,26 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
                 mal_hizmet, ara, genel = brut, net, beklenen
     if genel is None:  # 'Vergi Dahil Toplam' tevkifattan öncedir; ödenecek tutar = bu - tevkifat
         dahil = tutar(r"vergi(?:ler)? dahil toplam(?: tutari?)?")
-        genel = round(dahil - tevk, 2) if dahil is not None else None
+        genel = round(dahil - tevk - stopaj, 2) if dahil is not None else None
     # KDV dışındaki vergiler (konaklama vergisi, ÖTV, ÖİV...) genel toplama eklenir
     diger = round(sum(para_coz(m.group(2)) or 0 for m in re.finditer(
         r"(konaklama vergisi|hesaplanan kv|ozel tuketim vergisi|otv|ozel iletisim vergisi|oiv|eglence vergisi)\s*"
         r"(?:\([^)]*\)|%\s*[\d.,]+)?\s*:?\s*"
         r"([\d.,]*\d)(?!\s*%)", s)), 2)
-    if diger and ara is not None and kdv is not None and genel is not None and abs(ara + kdv - tevk + diger - genel) > 0.05:
+    if diger and ara is not None and kdv is not None and genel is not None and abs(ara + kdv - tevk - stopaj + diger - genel) > 0.05:
         diger = 0  # yakalanan sayı vergi tutarı değilmiş (ör. oran)
     if not diger and ara is not None and genel is not None and re.search(r"konaklama vergisi|otv|ozel tuketim|oiv|ozel iletisim", s):
         kdv_ = kdv if kdv is not None else 0
-        fark = round(genel - (ara + kdv_ - tevk), 2)
+        fark = round(genel - (ara + kdv_ - tevk - stopaj), 2)
         diger = fark if fark > 0.01 else 0
     if ara is None and genel is not None and kdv is not None:
-        ara = round(genel + tevk - kdv - diger, 2)
+        ara = round(genel + tevk + stopaj - kdv - diger, 2)
     if kdv is None and genel is not None and ara is not None:
-        kdv = round(genel + tevk - ara - diger, 2)  # KDV satırı okunamadıysa farktan bul
+        kdv = round(genel + tevk + stopaj - ara - diger, 2)  # KDV satırı okunamadıysa farktan bul
 
     def tutuyor(x):  # bu tutar mal/hizmet toplamıysa KDV ve vergilerle ödenecek tutarı verir
-        return x is not None and None not in (kdv, genel) and abs(x + kdv - tevk + diger - genel) <= 0.05
-    if genel is None and None not in (ara, kdv, mal_hizmet) and abs(ara + kdv - tevk + diger - mal_hizmet) <= 0.05 \
+        return x is not None and None not in (kdv, genel) and abs(x + kdv - tevk - stopaj + diger - genel) <= 0.05
+    if genel is None and None not in (ara, kdv, mal_hizmet) and abs(ara + kdv - tevk - stopaj + diger - mal_hizmet) <= 0.05 \
             and abs(mal_hizmet - ara) > 0.05:
         genel, mal_hizmet = mal_hizmet, ara  # fiş: "Toplam: 12.000" ödenecek tutar, "Net Mal Değeri: 10.000" mal/hizmet
     net_mal = round(mal_hizmet - iskonto, 2) if mal_hizmet is not None else None
@@ -1674,7 +1723,7 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
                 or _fis_kalemleri(metin, hedefler, genel, kdv))
     # Satırda yazan diğer vergiler (konaklama vergisi) faturanın altında ayrıca yazmıyorsa oradan alınır
     satir_diger = round(sum(k.pop("_diger", 0) or 0 for k in kalemler or []), 2)
-    if satir_diger and not diger and None not in (ara, kdv, genel) and abs(ara + kdv - tevk + satir_diger - genel) <= 0.05:
+    if satir_diger and not diger and None not in (ara, kdv, genel) and abs(ara + kdv - tevk - stopaj + satir_diger - genel) <= 0.05:
         diger = satir_diger
     ozet, notlar_ek = None, ""
     if not kalemler and genel is not None:
@@ -1713,6 +1762,7 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
         elif tevk and not satir_tevk and not _tevkifati_dagit(kalemler, tevk, metin):
             notlar += " Faturada tevkifat var ama hangi kalemlere ait olduğu okunamadı; kalemlerde tevkifat oranını seçin."
         _kodlari_tamamla(kalemler, metin)
+        stopaj = stopaji_dagit(kalemler, stopaj, stopaj_orani)
     if kalemler and ara is not None:
         kalemler += _ek_tutarlar(metin.splitlines(), s, kalemler, ara, oran)
     # Fiyatsız ve tutarsız satır, metni faturanın "Not:" satırında da geçiyorsa ("KÜTAHYA TOROSGAZ FİRMASI ALDI") kalem
@@ -1758,7 +1808,7 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
     # Elektrik faturasında bu ayın yuvarlaması eklenir, "Önceki Yuvarlama" düşülür (309,49 + 0,06 - 0,05 = 309,50).
     yuv = round(sum((-1 if m.group(1) else 1) * (para_coz(m.group(2)) or 0)
                     for m in re.finditer(r"(onceki )?\byuvarlama\s*:?\s*(-?[\d.,]*\d)", s)), 2)
-    if kalemler and yuv and None not in (genel, ara, kdv) and abs(ara + kdv - tevk + diger + yuv - genel) <= 0.01 \
+    if kalemler and yuv and None not in (genel, ara, kdv) and abs(ara + kdv - tevk - stopaj + diger + yuv - genel) <= 0.01 \
             and not any(sade(k["aciklama"]).startswith("yuvarlama") for k in kalemler):
         kalemler.append({"aciklama": "Yuvarlama", "miktar": 1, "birim": None, "birim_fiyat": yuv, "kdv_orani": 0, "tutar": yuv})
         ara = round(ara + yuv, 2)
@@ -1784,7 +1834,7 @@ def pdf_fatura_oku(veri: bytes, santiyeler: list[str] | None = None, sirket_unva
         "satici": {**satici, "vergi_dairesi": None, "adres": None, "telefon": None, "iban": None},
         "alici": alici,
         "kalemler": [iskontoyu_ayir(susu_temizle(k)) for k in kalemler],
-        "ara_toplam": ara, "kdv_toplam": kdv, "tevkifat": tevk, "diger_vergiler": diger, "genel_toplam": genel,
+        "ara_toplam": ara, "kdv_toplam": kdv, "tevkifat": tevk, "stopaj": stopaj, "diger_vergiler": diger, "genel_toplam": genel,
         "yuvarlama": yuvarlama_farki, "aciklama": "; ".join(k["aciklama"] for k in yazi_satirlari) or None,
         "para_birimi": para or "TRY", "kur": kur if para else None, "tl_toplam": tl_genel if para else None,
         "fatura_tipi": "IADE" if re.search(r"fatura\s*tipi\s*:?\s*iade\b|\biade faturasi\b", sade(metin)) else None,

@@ -81,8 +81,13 @@ def fatura(fatura_id: int, db: Session = Depends(get_db), k: Kullanici = Depends
         return (f"<br><small>KDV tevkifatı {float(kl.tevkifat_orani):g}/10"
                 f"{' · ' + escape(kl.tevkifat_kodu) + ' ' + escape(ad) if kl.tevkifat_kodu else ''}: "
                 f"{_para(kural.tevkifat_tutari(kl.tutar, kl.kdv_orani, kl.tevkifat_orani, kl.kdv_tutari))}</small>")
+
+    def stopaj_notu(kl):
+        if not float(kl.stopaj_orani or 0):
+            return ""
+        return f"<br><small>Stopaj %{float(kl.stopaj_orani):g}: {_para(kural.stopaj_tutari(kl.tutar, kl.stopaj_orani))}</small>"
     kalemler = "".join(
-        f"<tr><td>{i}</td><td>{escape(kl.aciklama)}{tevk_notu(kl)}</td><td class='sayi'>{float(kl.miktar):g} {escape(kl.birim or '')}</td>"
+        f"<tr><td>{i}</td><td>{escape(kl.aciklama)}{tevk_notu(kl)}{stopaj_notu(kl)}</td><td class='sayi'>{float(kl.miktar):g} {escape(kl.birim or '')}</td>"
         f"<td class='sayi'>{_para(kl.birim_fiyat)}</td>"
         f"<td class='sayi'>{'%' + format(float(kl.iskonto_orani), 'g') if float(kl.iskonto_orani or 0) else ''}</td>"
         f"<td class='sayi'>{_para(kl.iskonto_tutari) if float(kl.iskonto_tutari or 0) else ''}</td>"
@@ -92,6 +97,8 @@ def fatura(fatura_id: int, db: Session = Depends(get_db), k: Kullanici = Depends
     toplam = [("Mal/Hizmet Toplamı (KDV hariç)", f.ara_toplam), ("Hesaplanan KDV", f.kdv_toplam)]
     if float(f.tevkifat or 0):
         toplam.append(("KDV Tevkifatı", -float(f.tevkifat)))
+    if float(f.stopaj or 0):
+        toplam.append(("Gelir/Kurumlar Vergisi Stopajı", -float(f.stopaj)))
     if float(f.diger_vergiler or 0):
         toplam.append(("Diğer Vergiler", f.diger_vergiler))
     if float(f.yuvarlama or 0):

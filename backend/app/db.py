@@ -135,6 +135,8 @@ EKLENEN_SUTUNLAR = [
     ("cekler", "ozel_kod", "VARCHAR(50)"),
     ("cekler", "kesideci_vkn", "VARCHAR(11)"),
     ("cekler", "lehtar", "VARCHAR(200)"),
+    ("faturalar", "stopaj", "NUMERIC(14, 2) DEFAULT 0 NOT NULL"),
+    ("fatura_kalemleri", "stopaj_orani", "NUMERIC(5, 2) DEFAULT 0 NOT NULL"),
 ]
 
 
@@ -156,6 +158,7 @@ def _sutunlari_ekle(baglanti, motor) -> None:
 # sonuna yeni numarayla eklenir (eski adımlar değiştirilmez).
 SEMA_ADIMLARI = [
     (1, "Eski veritabanına eksik sütunlar eklenir", _sutunlari_ekle),
+    (2, "Faturalara stopaj sütunları eklenir", _sutunlari_ekle),
 ]
 SEMA_YEDEK_KLASORU = VERI_KLASORU / "guncelleme-yedekleri"
 

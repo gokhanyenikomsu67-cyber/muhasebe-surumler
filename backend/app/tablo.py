@@ -133,11 +133,23 @@ def _kalem(d: dict[str, list[str]], oran: float | None = None) -> dict | None:
     if m:
         kdvt, kdv = kdvt if kdvt is not None else para_coz(m.group(1)), para_coz(m.group(2))
     # Diğer vergiler: "KONAKLAMA VER. (%2,00)=58,04TL", "KV (%2,00) = 50,00 TL", "80,36 TL (%2)"
+    # Stopaj ("GELİR VERGİSİ STOPAJI (%5,00)=96.790,96 TL") diğer vergi değildir: ödenecekten düşülür, oranı kaleme yazılır.
+    # Aynı hücredeki KDV tevkifatı ayrıca okunur, diğer vergiye katılmaz.
     diger = 0.0
+    stopaj_orani = None
     for h in d.get("diger", []):
         h = " ".join(h.split())
+        parcalar = list(re.finditer(r"([^=()]*?)\(?\s*%\s*([\d.,]+)\s*\)?\s*=\s*(\d[\d.,]*)", h))
+        if parcalar:
+            for m in parcalar:
+                etiket = sade(m.group(1))
+                if re.search(r"stopaj|stpj", etiket):
+                    stopaj_orani = para_coz(m.group(2))
+                elif not re.search(r"tevk", etiket) and para_coz(m.group(3)):
+                    diger += para_coz(m.group(3))
+            continue
         m = re.search(r"=\s*(\d[\d.,]*)", h) or re.match(r"(\d[\d.,]*)\s*(?:TL|TRY)?\s*\(\s*%", h)
-        if m and para_coz(m.group(1)):
+        if m and para_coz(m.group(1)) and not re.search(r"stopaj|stpj|tevk", sade(h)):
             diger += para_coz(m.group(1))
     miktar = miktar or 1
     if tutar is None and kdvli is not None and kdvt is not None:
@@ -180,6 +192,8 @@ def _kalem(d: dict[str, list[str]], oran: float | None = None) -> dict | None:
         kalem["_kdvt"] = kdvt
     if diger:
         kalem["_diger"] = round(diger, 2)
+    if stopaj_orani:
+        kalem["stopaj_orani"] = stopaj_orani
     return kalem
 
 

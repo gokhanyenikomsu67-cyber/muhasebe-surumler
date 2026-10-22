@@ -1553,7 +1553,7 @@ def test_sema_surumlu_guncelleme_once_yedek_alir(tmp_path, monkeypatch):
     assert dbm.sema_surumu(motor) == dbm.SEMA_ADIMLARI[-1][0]
     assert len(list((tmp_path / "yedekler").glob("sema-1-oncesi-*.db"))) == 1
     dbm.db_guncelle(motor)  # ikinci açılışta adım tekrar çalışmaz, yedek alınmaz
-    assert len(list((tmp_path / "yedekler").glob("*.db"))) == 1
+    assert len(list((tmp_path / "yedekler").glob("*.db"))) == len(dbm.SEMA_ADIMLARI)
 
     # Yarıda kalan adım geri alınır, sürüm ilerlemez; yedekte eski veri durur
     def bozuk(baglanti, _motor):
@@ -1565,7 +1565,7 @@ def test_sema_surumlu_guncelleme_once_yedek_alir(tmp_path, monkeypatch):
         dbm.db_guncelle(motor)
     with motor.connect() as b:
         assert b.execute(text("SELECT unvan FROM sirketler")).scalar() == "ARMA"
-    assert dbm.sema_surumu(motor) == 1
+    assert dbm.sema_surumu(motor) == dbm.SEMA_ADIMLARI[-2][0]  # bozuk adımdan önceki son sürüm
     import sqlite3
     yedek = next((tmp_path / "yedekler").glob("sema-99-oncesi-*.db"))
     assert sqlite3.connect(yedek).execute("SELECT unvan FROM sirketler").fetchone()[0] == "ARMA"

@@ -14,12 +14,12 @@ IZLENEN = {Fatura: "fatura", Hareket: "hareket", Cek: "cek", Cari: "cari", Banka
 TASLAKLI = (Fatura, Hareket)  # taslakken yapılan düzenlemeler geçmişe yazılmaz, onaydan sonrakiler yazılır
 ATLANAN = {"id", "sirket_id", "ai_okuma", "olusturma", "ekstre_anahtari", "kaynak_dosya", "xml_dosya", "bagli_hareket_id",
            "acilis_ekstreden", "ekstre_tarihi", "ekstre_bakiye"}
-KALEM_ALANLARI = ("aciklama", "miktar", "birim_fiyat", "kdv_orani", "tutar", "kdv_tutari", "tevkifat_orani", "iskonto_tutari",
+KALEM_ALANLARI = ("aciklama", "miktar", "birim_fiyat", "kdv_orani", "tutar", "kdv_tutari", "tevkifat_orani", "stopaj_orani", "iskonto_tutari",
                   "santiye_id")
 ALAN_ADLARI = {
     "durum": "Durum", "tarih": "Tarih", "vade": "Vade", "tutar": "Tutar", "yon": "Yön", "tur": "Tür", "cari_id": "Cari",
     "banka_hesap_id": "Banka hesabı", "santiye_id": "Şantiye", "gider_turu": "Gider türü", "aciklama": "Açıklama",
-    "fatura_no": "Fatura no", "ara_toplam": "KDV hariç", "kdv_toplam": "KDV", "tevkifat": "Tevkifat",
+    "fatura_no": "Fatura no", "ara_toplam": "KDV hariç", "kdv_toplam": "KDV", "tevkifat": "Tevkifat", "stopaj": "Stopaj",
     "genel_toplam": "Genel toplam", "iptal_nedeni": "İptal nedeni", "unvan": "Ünvan", "vkn": "VKN", "iban": "IBAN",
     "acilis_bakiyesi": "Açılış bakiyesi", "cek_no": "Çek no", "kalemler": "Kalemler", "kur": "Kur",
     "para_birimi": "Para birimi", "ciro_cari_id": "Ciro edilen cari",

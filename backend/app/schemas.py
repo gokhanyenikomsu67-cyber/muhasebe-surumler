@@ -76,6 +76,7 @@ class KalemGiris(BaseModel):
     santiye_id: int | None = None
     tevkifat_orani: float = 0  # onda kaç: 2 = 2/10
     tevkifat_kodu: str | None = None
+    stopaj_orani: float = 0  # gelir/kurumlar vergisi stopajı yüzdesi (5 = %5)
     kdv_tutari: float | None = None  # faturada yazan KDV oran x tutardan farklıysa
     iskonto_orani: float = 0  # yüzde
     iskonto_tutari: float = 0  # tutar = miktar x birim fiyat - iskonto tutarı
@@ -95,6 +96,7 @@ class FaturaGiris(BaseModel):
     santiye_id: int | None = None
     gider_turu: str | None = None
     tevkifat: float = 0
+    stopaj: float = 0
     diger_vergiler: float = 0
     yuvarlama: float = 0
     para_birimi: str = "TRY"
@@ -120,6 +122,7 @@ class FaturaCikis(Orm):
     ara_toplam: float
     kdv_toplam: float
     tevkifat: float
+    stopaj: float = 0
     diger_vergiler: float = 0
     yuvarlama: float = 0
     genel_toplam: float

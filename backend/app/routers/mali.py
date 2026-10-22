@@ -153,6 +153,63 @@ def excel_tevkifat(yil: int, ay: int = 0, db: Session = Depends(get_db), k: Kull
                   {baslik}, dipnot=MALI_UYARI)
 
 
+# --- Stopaj ------------------------------------------------------------------
+
+def stopaj_veri(db: Session, k: Kullanici, yil: int, ay: int = 0) -> dict:
+    """Dönemdeki stopajlı onaylı faturalar, orana göre. Alışta stopajı biz keseriz (muhtasar ile vergi dairesine öderiz);
+    satışta alıcı keser, bizim adımıza öder (mahsup edilir)."""
+    from .. import kural
+    bas, son = (date(yil, ay, 1), date(yil + (ay == 12), ay % 12 + 1, 1)) if ay else (date(yil, 1, 1), date(yil + 1, 1, 1))
+    q = select(Fatura).where(Fatura.sirket_id == k.sirket_id, Fatura.durum == "onayli", Fatura.tarih >= bas, Fatura.tarih < son,
+                             Fatura.stopaj != 0).order_by(Fatura.tarih, Fatura.id)
+    gruplar: dict[tuple, dict] = {}
+    faturalar = []
+    for f in db.scalars(q):
+        yon = "satis" if f.yon == "giden" else "alis"
+        c = tl_kur(f)
+        parcalar = [(float(kl.stopaj_orani), c * float(kl.tutar), c * kural.stopaj_tutari(kl.tutar, kl.stopaj_orani))
+                    for kl in f.kalemler if float(kl.stopaj_orani or 0)] or [(0.0, c * float(f.ara_toplam), c * float(f.stopaj))]
+        for oran, matrah, tutar in parcalar:
+            g = gruplar.setdefault((yon, oran), {"yon": yon, "oran": f"%{oran:g}" if oran else "-", "belge_sayisi": 0,
+                                                 "matrah": 0.0, "stopaj": 0.0, "_faturalar": set()})
+            g["_faturalar"].add(f.id)
+            g["matrah"] += matrah
+            g["stopaj"] += tutar
+        faturalar.append({"id": f.id, "yon": yon, "tarih": f.tarih.isoformat(), "fatura_no": f.fatura_no,
+                          "cari": f.cari.unvan if f.cari else None, "vkn": f.cari.vkn if f.cari else None,
+                          "oran": ", ".join(sorted({f"%{p[0]:g}" for p in parcalar if p[0]})) or None,
+                          "matrah": round(sum(p[1] for p in parcalar), 2), "stopaj": round(c * float(f.stopaj), 2),
+                          "odenecek": round(c * float(f.genel_toplam), 2)})
+    sonuc = {"yil": yil, "ay": ay, "alis": [], "satis": [], "faturalar": faturalar}
+    for (yon, _), g in sorted(gruplar.items(), key=lambda x: x[0][1]):
+        g["belge_sayisi"] = len(g.pop("_faturalar"))
+        g["matrah"], g["stopaj"] = round(g["matrah"], 2), round(g["stopaj"], 2)
+        sonuc[yon].append(g)
+    sonuc["alis_stopaj"] = round(sum(g["stopaj"] for g in sonuc["alis"]), 2)
+    sonuc["satis_stopaj"] = round(sum(g["stopaj"] for g in sonuc["satis"]), 2)
+    return sonuc
+
+
+@router.get("/raporlar/stopaj")
+def stopaj_raporu(yil: int, ay: int = 0, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+    return stopaj_veri(db, k, yil, ay)
+
+
+@router.get("/excel/stopaj")
+def excel_stopaj(yil: int, ay: int = 0, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+    v = stopaj_veri(db, k, yil, ay)
+    donem = f"{ay:02d}-{yil}" if ay else str(yil)
+    satirlar = [[("Alış (biz keseriz, muhtasar ile öderiz)" if g["yon"] == "alis" else "Satış (alıcı keser)"), g["oran"],
+                 g["belge_sayisi"], g["matrah"], g["stopaj"]] for y in ("alis", "satis") for g in v[y]]
+    satirlar.append([None] * 9)
+    baslik = len(satirlar)
+    satirlar.append(["Fatura", "Tarih", "Fatura No", "Cari", "VKN", "Oran", "KDV Hariç", "Stopaj", "Ödenecek"])
+    satirlar += [["Alış" if f["yon"] == "alis" else "Satış", f["tarih"], f["fatura_no"], f["cari"], f["vkn"], f["oran"],
+                  f["matrah"], f["stopaj"], f["odenecek"]] for f in v["faturalar"]]
+    return _excel(f"Stopaj {donem}", ["Taraf", "Oran", "Belge Sayısı", "Stopaja Tabi Tutar", "Stopaj"], satirlar,
+                  f"stopaj-{yil}{'-%02d' % ay if ay else ''}", {baslik}, dipnot=MALI_UYARI)
+
+
 # --- Ba-Bs -----------------------------------------------------------------
 
 def babs_veri(db: Session, k: Kullanici, yil: int, ay: int, limit: float = 5000) -> dict:

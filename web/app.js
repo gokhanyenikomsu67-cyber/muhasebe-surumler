@@ -651,7 +651,7 @@ function faturaFormAc(fatura, yon) {
     async ciz(el) {
       if (fatura) { try { fatura = await api(`/api/faturalar/${fatura.id}`); } catch (e) { return bildir(e.message, true); } }
       const { cariler, santiyeler } = await secenekleriGetir();
-      const f = fatura || { yon, kalemler: [], tevkifat: 0, para_birimi: "TRY" };
+      const f = fatura || { yon, kalemler: [], tevkifat: 0, stopaj: 0, para_birimi: "TRY" };
       if (!fatura && yon === "giden") {  // yeni satış faturasına sıradaki numarayı öner
         try { f.fatura_no = (await api("/api/faturalar/sonraki-no?yon=giden")).fatura_no; } catch { /* öneri yoksa boş kalır */ }
       }
@@ -679,6 +679,7 @@ function faturaFormAc(fatura, yon) {
           alan("Fatura Tipi", "fatura_tipi", f.fatura_tipi, { secenekler: FATURA_TIPLERI.some(([d]) => d === (f.fatura_tipi || "")) ? FATURA_TIPLERI
             : [...FATURA_TIPLERI, [f.fatura_tipi, f.fatura_tipi]] }),
           alan("Tevkifat", "tevkifat", f.tevkifat, { tip: "number" }),
+          alan("Stopaj (gelir/kurumlar vergisi)", "stopaj", f.stopaj || 0, { tip: "number" }),
           alan("Diğer vergiler (konaklama, ÖTV…)", "diger_vergiler", f.diger_vergiler || 0, { tip: "number" }),
           alan("Yuvarlama farkı (faturadaki)", "yuvarlama", f.yuvarlama || 0, { tip: "number" }),
           alan("Açıklama", "aciklama", f.aciklama, { genis: true }))));
@@ -867,6 +868,7 @@ function faturaFormAc(fatura, yon) {
             title: "Faturada yazan KDV tutarı farklıysa düzeltin; boş bırakılırsa oran x tutar",
             oninput: (e) => { e.target.dataset.elle = e.target.value === "" ? "" : "1"; } })),
           h("td", {}, tevkifatSecimi(k)),
+          h("td", {}, sayiAlan("stopaj_orani", Number(k.stopaj_orani) || "", { style: "width:55px", title: "Gelir/kurumlar vergisi stopajı yüzdesi (ör. 5); tutar = KDV hariç tutar x oran" })),
           h("td", { class: "sayi tutar" }),
           h("td", {}, h("select", { "data-a": "santiye_id", title: "Fatura birden fazla şantiyeye aitse kalemin şantiyesini seçin" },
             kalemSantiye.map(([d, m]) => h("option", { value: d, selected: String(d) === String(k.santiye_id ?? "") }, m)))),
@@ -887,11 +889,11 @@ function faturaFormAc(fatura, yon) {
         return { aciklama: d("aciklama") || "-", miktar, birim: d("birim") || null, birim_fiyat, iskonto_orani, iskonto_tutari,
           tutar: degismedi ? tr.kayitliTutar : null,
           kdv_orani: Number(d("kdv_orani")) || 0, santiye_id: Number(d("santiye_id")) || null,
-          tevkifat_orani: Number(tpay) || 0, tevkifat_kodu: tkod || null,
+          tevkifat_orani: Number(tpay) || 0, tevkifat_kodu: tkod || null, stopaj_orani: Number(d("stopaj_orani")) || 0,
           kdv_tutari: $("[data-a=kdv_tutari]", tr).dataset.elle ? Number(d("kdv_tutari")) || 0 : null };
       });
       function hesapla() {
-        let ara = 0, kdv = 0, satirTevk = 0, oranli = false;
+        let ara = 0, kdv = 0, satirTevk = 0, oranli = false, satirStop = 0, stopajli = false;
         const okunan = kalemleriOku();
         [...kalemGovde.rows].forEach((tr, i) => {
           const k = okunan[i];
@@ -909,39 +911,47 @@ function faturaFormAc(fatura, yon) {
           $("[data-a=tevkifat]", tr).title = k.tevkifat_orani ? `Tevkifat: ${para(tv)}` : "KDV tevkifatı yok";
           ara += tutar; kdv += satirKdv;
           if (k.tevkifat_orani) { oranli = true; satirTevk += tv; }
+          const st = yuvarla(tutar * k.stopaj_orani / 100);
+          $("[data-a=stopaj_orani]", tr).title = k.stopaj_orani ? `Stopaj: ${para(st)}` : "Stopaj yok (yüzde yazın, ör. 5)";
+          if (k.stopaj_orani) { stopajli = true; satirStop += st; }
         });
         // Kalemlerde tevkifat seçildiyse faturanın tevkifatı satırların toplamıdır, elle yazılmaz.
         form.elements.tevkifat.readOnly = oranli;
         if (oranli) form.elements.tevkifat.value = Math.round(satirTevk * 100) / 100;
         const tevk = Number(form.elements.tevkifat.value) || 0;
+        // Stopaj da öyle: kalemde oran yazıldıysa satırların toplamı; ödenecekten düşülür
+        form.elements.stopaj.readOnly = stopajli;
+        if (stopajli) form.elements.stopaj.value = Math.round(satirStop * 100) / 100;
+        const stop = Number(form.elements.stopaj.value) || 0;
         // Yuvarlama: satıcının kendi kuruş farkı, diğer vergiler gibi genel toplama eklenir
         const diger = (Number(form.elements.diger_vergiler.value) || 0) + (Number(form.elements.yuvarlama.value) || 0);
         const yuv = Number(form.elements.yuvarlama.value) || 0;
         const pb = (form.elements.para_birimi.value || "TRY").trim().toUpperCase(), kur = Number(form.elements.kur.value) || 0;
         const doviz = pb !== "TRY" && pb !== "TL";
         toplamAlan.replaceChildren(h("span", {}, "Ara Toplam"), h("span", {}, para(ara)), h("span", {}, "KDV"), h("span", {}, para(kdv)),
-          h("span", {}, "Tevkifat"), h("span", {}, para(tevk)), ...(diger - yuv ? [h("span", {}, "Diğer vergiler"), h("span", {}, para(diger - yuv))] : []),
+          h("span", {}, "Tevkifat"), h("span", {}, para(tevk)), ...(stop ? [h("span", {}, "Stopaj"), h("span", {}, para(stop))] : []), ...(diger - yuv ? [h("span", {}, "Diğer vergiler"), h("span", {}, para(diger - yuv))] : []),
           ...(yuv ? [h("span", {}, "Yuvarlama"), h("span", {}, para(yuv))] : []),
-          h("span", { class: "genel" }, `Genel Toplam${doviz ? ` (${pb})` : ""}`), h("span", { class: "genel" }, para(ara + kdv - tevk + diger)),
+          h("span", { class: "genel" }, `Genel Toplam${doviz ? ` (${pb})` : ""}`), h("span", { class: "genel" }, para(ara + kdv - tevk - stop + diger)),
           ...(doviz ? (kur ? [h("span", { class: "tl-karsiligi" }, `TL karşılığı (kur ${kur.toLocaleString("tr-TR", { maximumFractionDigits: 6 })})`), h("span", {}, ""),
             h("span", {}, "Ara Toplam (TL)"), h("span", {}, para(ara * kur)), h("span", {}, "KDV (TL)"), h("span", {}, para(kdv * kur)),
             ...(tevk ? [h("span", {}, "Tevkifat (TL)"), h("span", {}, para(tevk * kur))] : []),
-            h("span", { class: "genel" }, "Genel Toplam (TL)"), h("span", { class: "genel" }, para((ara + kdv - tevk + diger) * kur)),
-            ...(f.ai_okuma?.tl_toplam && Math.abs((ara + kdv - tevk + diger) * kur - f.ai_okuma.tl_toplam) > 1
+            h("span", { class: "genel" }, "Genel Toplam (TL)"), h("span", { class: "genel" }, para((ara + kdv - tevk - stop + diger) * kur)),
+            ...(f.ai_okuma?.tl_toplam && Math.abs((ara + kdv - tevk - stop + diger) * kur - f.ai_okuma.tl_toplam) > 1
               ? [h("span", { class: "negatif" }, "Faturada yazan TL"), h("span", { class: "negatif" }, para(f.ai_okuma.tl_toplam))] : [])]
             : [h("span", {}, "TL karşılığı"), h("span", { class: "negatif" }, "Kuru girin")]) : []));
         // Okunan faturanın KDV'si ve ödenecek tutarı kalemlerden hesaplananı tutmuyorsa kırmızı uyarı
         const o = f.ai_okuma || {};
         const farklar = [];
         if (o.kdv_toplam != null && Math.abs(kdv - o.kdv_toplam) > 0.05) farklar.push(`KDV ${para(kdv)} (faturada ${para(o.kdv_toplam)})`);
-        if (o.genel_toplam != null && Math.abs(ara + kdv - tevk + diger - o.genel_toplam) > 0.05)
-          farklar.push(`ödenecek ${para(ara + kdv - tevk + diger)} (faturada ${para(o.genel_toplam)})`);
+        if (o.genel_toplam != null && Math.abs(ara + kdv - tevk - stop + diger - o.genel_toplam) > 0.05)
+          farklar.push(`ödenecek ${para(ara + kdv - tevk - stop + diger)} (faturada ${para(o.genel_toplam)})`);
         farkKutu.hidden = !farklar.length;
         farkKutu.textContent = `Hesaplanan tutarlar faturayı tutmuyor: ${farklar.join(", ")}. Kalemlerin KDV tutarlarını faturadaki gibi düzeltin.`;
       }
       for (const k of f.kalemler) kalemSatiri(k);
       if (!f.kalemler.length) kalemSatiri();
       form.elements.tevkifat.addEventListener("input", hesapla);
+      form.elements.stopaj.addEventListener("input", hesapla);
       kalemGovde.addEventListener("change", hesapla);
       form.elements.diger_vergiler.addEventListener("input", hesapla);
       form.elements.yuvarlama.addEventListener("input", hesapla);
@@ -951,7 +961,7 @@ function faturaFormAc(fatura, yon) {
       form.append(h("fieldset", {}, h("legend", {}, "Kalemler"),
         h("div", { class: "tablo-kap" }, h("table", { class: "liste kalemler" },
           h("thead", {}, h("tr", {}, ["Sıra No", "Mal Hizmet Adı", "Miktar", "Birim", "Birim Fiyat", "İskonto Oranı %", "İskonto Tutarı", "KDV Oranı %", "KDV Tutarı",
-            "Tevkifat", "Mal Hizmet Tutarı", "Şantiye", ""].map((b) => h("th", {}, b)))), kalemGovde)),
+            "Tevkifat", "Stopaj %", "Mal Hizmet Tutarı", "Şantiye", ""].map((b) => h("th", {}, b)))), kalemGovde)),
         h("div", { class: "dugmeler" }, h("button", { type: "button", class: "dugme", onclick: () => { kalemSatiri(); hesapla(); } }, "+ Satır ekle")),
         farkKutu, toplamAlan));
       form.append(h("div", { class: "dugmeler" },
@@ -986,8 +996,9 @@ function faturaFormAc(fatura, yon) {
     },
     async kaydet(sessiz = false) {
       if (!this.form?.reportValidity()) return;
-      const v = formVerisi(this.form, ["cari_id", "santiye_id", "tevkifat", "diger_vergiler", "yuvarlama", "kur"]);
+      const v = formVerisi(this.form, ["cari_id", "santiye_id", "tevkifat", "stopaj", "diger_vergiler", "yuvarlama", "kur"]);
       v.tevkifat = v.tevkifat || 0;
+      v.stopaj = v.stopaj || 0;
       v.diger_vergiler = v.diger_vergiler || 0;
       v.yuvarlama = v.yuvarlama || 0;
       v.para_birimi = v.para_birimi || "TRY";
@@ -2786,6 +2797,37 @@ function tevkifatRaporuAc() {
   });
 }
 
+function stopajRaporuAc() {
+  const once = new Date(); once.setMonth(once.getMonth() - 1); // muhtasar bir önceki ay için verilir
+  const f = { ay: `${once.getFullYear()}-${String(once.getMonth() + 1).padStart(2, "0")}`, tumYil: false };
+  const q = () => { const [y, a] = f.ay.split("-"); return `yil=${Number(y)}&ay=${f.tumYil ? 0 : Number(a)}`; };
+  sekmeAc("rapor-stopaj", "Stopaj Raporu", {
+    async ciz(el) {
+      let v;
+      try { v = await api(`/api/raporlar/stopaj?${q()}`); } catch (e) { return bildir(e.message, true); }
+      const kol = [["oran", "Oran"], ["belge_sayisi", "Belge"], ["matrah", "Stopaja Tabi Tutar", "para"], ["stopaj", "Stopaj", "para"]];
+      const toplam = { toplam: ["belge_sayisi", "matrah", "stopaj"] };
+      el.append(MALI_UYARI(), h("div", { class: "liste-ust" }, h("h2", {}, "Stopaj Raporu"),
+          "Dönem:", h("input", { type: "month", value: f.ay, onchange: (e) => { f.ay = e.target.value || f.ay; yenidenCiz(); } }),
+          h("label", {}, h("input", { type: "checkbox", checked: f.tumYil, onchange: (e) => { f.tumYil = e.target.checked; yenidenCiz(); } }), " Tüm yıl"),
+          h("button", { class: "dugme ana", onclick: () => this.excel() }, "Excel'e aktar (F9)")),
+        h("h3", {}, `Alışlarda stopaj: firmanız keser, muhtasar ile öder (${para(v.alis_stopaj)})`),
+        v.alis.length ? raporTablosu(kol, v.alis, toplam) : h("p", {}, "Bu dönemde stopajlı alış yok."),
+        h("h3", {}, `Satışlarda stopaj: alıcı keser, firmanız adına öder (${para(v.satis_stopaj)})`),
+        v.satis.length ? raporTablosu(kol, v.satis, toplam) : h("p", {}, "Bu dönemde stopajlı satış yok."),
+        h("h3", {}, "Faturalar"),
+        v.faturalar.length ? raporTablosu([["tarih", "Tarih", "tarih"], [(x) => (x.yon === "alis" ? "Alış" : "Satış"), "Taraf"], ["fatura_no", "Fatura No"],
+          ["cari", "Cari"], ["oran", "Oran"], ["matrah", "KDV Hariç", "para"], ["stopaj", "Stopaj", "para"],
+          ["odenecek", "Cariye işlenen (ödenecek)", "para"]], v.faturalar,
+          { toplam: ["matrah", "stopaj", "odenecek"], ac: (x) => faturaFormAc({ id: x.id }, null) }) : null,
+        ACIKLAMA("Onaylı faturaların kalemlerindeki stopaj oranına göre hesaplanır. Stopaj ödenecek tutardan düşülür; cariye stopaj düşülmüş tutar işlenir. Satıra çift tıklayınca fatura açılır."));
+      durum("Stopaj raporu hazır");
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => indir(`/api/excel/stopaj?${q()}`, `stopaj-${f.ay}.xlsx`),
+  });
+}
+
 function babsAc() {
   const once = new Date(); once.setMonth(once.getMonth() - 1); // Ba-Bs bir önceki ay için verilir
   const f = { ay: `${once.getFullYear()}-${String(once.getMonth() + 1).padStart(2, "0")}`, limit: 5000 };
@@ -3330,7 +3372,7 @@ const MODULLER = [
   ["Banka / Kasa", [["Banka Hesapları", bankaHesaplariAc], ["Nakit Kasa", kasaAc], ["Ekstre Yükle", () => ekstreYukleAc()],
     ["Kredi Kartı Ekstresi Yükle", () => ekstreYukleAc("kart")], ["Onay Bekleyen Hareketler", taslakHareketlerAc],
     ["Tahsilat / Ödeme", hareketListesiAc], ["Mutabakat", mutabakatAc]]],
-  ["Mali Raporlar", [["KDV Özeti", kdvOzetiAc], ["Tevkifat Raporu", tevkifatRaporuAc], ["Ba-Bs Formları", babsAc], ["Gelir-Gider Tablosu", gelirGiderAc],
+  ["Mali Raporlar", [["KDV Özeti", kdvOzetiAc], ["Tevkifat Raporu", tevkifatRaporuAc], ["Stopaj Raporu", stopajRaporuAc], ["Ba-Bs Formları", babsAc], ["Gelir-Gider Tablosu", gelirGiderAc],
     ["Yaşlandırma (Vade Analizi)", yaslandirmaAc]]],
   ["Araçlar", [["Excel İşlemleri", excelIslemleriAc], ["Yedekler", yedeklerAc], ["Firma Bilgileri", firmaBilgileriAc], ["Kullanıcılar", kullanicilarAc], ["Değişiklik Geçmişi", () => gecmisAc()],
     ["Güncellemeleri Denetle", guncellemeleriDenetle], ["Verileri Sıfırla", verileriSifirla]]],

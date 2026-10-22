@@ -97,6 +97,8 @@ class Fatura(Base):
     ara_toplam: Mapped[float] = mapped_column(Para, default=0)
     kdv_toplam: Mapped[float] = mapped_column(Para, default=0)
     tevkifat: Mapped[float] = mapped_column(Para, default=0)
+    # Gelir/kurumlar vergisi stopajı: ödenecek tutardan düşülür (alıcı vergi dairesine öder)
+    stopaj: Mapped[float] = mapped_column(Para, default=0)
     diger_vergiler: Mapped[float] = mapped_column(Para, default=0)  # konaklama vergisi, ÖTV, ÖİV vb.
     # Satıcının kendi kuruş yuvarlaması: kalemlerin toplamı faturada yazandan farklıysa fark (kalem uydurulmaz)
     yuvarlama: Mapped[float] = mapped_column(Para, default=0)
@@ -154,6 +156,8 @@ class FaturaKalem(Base):
     # KDV tevkifatı: oran onda kaç (2 = 2/10), KDVGUT kodu (624 yük taşımacılığı...). Tutar = KDV x oran / 10.
     tevkifat_orani: Mapped[float] = mapped_column(Numeric(4, 2), default=0)
     tevkifat_kodu: Mapped[str | None] = mapped_column(String(10))
+    # Stopaj yüzdesi (5 = %5); tutar = KDV hariç tutar x oran / 100
+    stopaj_orani: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     # İskonto: birim fiyat liste fiyatıdır; tutar = miktar x birim fiyat - iskonto tutarı.
     iskonto_orani: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     iskonto_tutari: Mapped[float] = mapped_column(Para, default=0)

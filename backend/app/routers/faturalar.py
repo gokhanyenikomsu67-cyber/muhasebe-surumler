@@ -40,8 +40,8 @@ def kalemleri_yaz(f: Fatura, kalemler: list[schemas.KalemGiris]):
     """Toplamları kalemlerden hesaplar. Kalemlerde tevkifat oranı varsa faturanın tevkifatı satırların toplamıdır;
     hiçbir satırda oran yoksa (eski kayıt, Excel'den gelen) faturaya yazılan tevkifat kalır."""
     f.kalemler.clear()
-    ara = kdv = tevk = 0.0
-    oranli = False
+    ara = kdv = tevk = stop = 0.0
+    oranli = stopajli = False
     for k in kalemler:
         brut = round(k.miktar * k.birim_fiyat, 2)
         isk_t = float(k.iskonto_tutari or 0)
@@ -54,18 +54,23 @@ def kalemleri_yaz(f: Fatura, kalemler: list[schemas.KalemGiris]):
             aciklama=k.aciklama, miktar=k.miktar, birim=k.birim,
             birim_fiyat=k.birim_fiyat, kdv_orani=k.kdv_orani, tutar=tutar, santiye_id=k.santiye_id,
             tevkifat_orani=pay, tevkifat_kodu=(k.tevkifat_kodu or None) if pay else None, kdv_tutari=k.kdv_tutari,
-            iskonto_orani=isk_o, iskonto_tutari=isk_t,
+            iskonto_orani=isk_o, iskonto_tutari=isk_t, stopaj_orani=max(0.0, min(float(k.stopaj_orani or 0), 100.0)),
         ))
         ara += tutar
         kdv += f.kalemler[-1].kdv
         if pay:
             oranli = True
             tevk += kural.tevkifat_tutari(tutar, k.kdv_orani, pay, k.kdv_tutari)
+        if k.stopaj_orani:
+            stopajli = True
+            stop += kural.stopaj_tutari(tutar, k.stopaj_orani)
     f.ara_toplam = round(ara, 2)
     f.kdv_toplam = round(kdv, 2)
     if oranli:
         f.tevkifat = round(tevk, 2)
-    f.genel_toplam = round(ara + kdv - (f.tevkifat or 0) + (f.diger_vergiler or 0) + float(f.yuvarlama or 0), 2)
+    if stopajli:
+        f.stopaj = round(stop, 2)
+    f.genel_toplam = round(ara + kdv - (f.tevkifat or 0) - float(f.stopaj or 0) + (f.diger_vergiler or 0) + float(f.yuvarlama or 0), 2)
 
 
 def kalem_giris(kl: dict, santiye_id: int | None = None, kdv_varsayilan: float = 0) -> schemas.KalemGiris:
@@ -74,7 +79,7 @@ def kalem_giris(kl: dict, santiye_id: int | None = None, kdv_varsayilan: float =
         aciklama=kl.get("aciklama") or "-", miktar=kl.get("miktar") or 1, birim=kl.get("birim"),
         birim_fiyat=kl.get("birim_fiyat") or 0, kdv_orani=kl["kdv_orani"] if kl.get("kdv_orani") is not None else kdv_varsayilan,
         tutar=kl.get("tutar"), santiye_id=santiye_id, tevkifat_orani=kl.get("tevkifat_orani") or 0,
-        tevkifat_kodu=kl.get("tevkifat_kodu"), kdv_tutari=kl.get("kdv_tutari"),
+        tevkifat_kodu=kl.get("tevkifat_kodu"), kdv_tutari=kl.get("kdv_tutari"), stopaj_orani=kl.get("stopaj_orani") or 0,
         iskonto_orani=kl.get("iskonto_orani") or 0, iskonto_tutari=kl.get("iskonto_tutari") or 0)
 
 
@@ -789,7 +794,8 @@ def taslak_olustur(db: Session, k: Kullanici, okunan: dict, yon: str, santiyeler
         fatura_no=okunan.get("fatura_no"), tarih=_tarih(okunan.get("tarih")), vade=_tarih(okunan.get("vade")),
         cari_id=cari.id if cari else None, santiye_id=santiye.id if santiye else None,
         gider_turu=okunan.get("onerilen_gider_turu") if okunan.get("onerilen_gider_turu") in GIDER_TURLERI else None,
-        tevkifat=okunan.get("tevkifat") or 0, diger_vergiler=okunan.get("diger_vergiler") or 0, yuvarlama=okunan.get("yuvarlama") or 0,
+        tevkifat=okunan.get("tevkifat") or 0, stopaj=okunan.get("stopaj") or 0,
+        diger_vergiler=okunan.get("diger_vergiler") or 0, yuvarlama=okunan.get("yuvarlama") or 0,
         aciklama=okunan.get("aciklama"), para_birimi=_para_birimi(okunan), kur=_kur(okunan),
         fatura_tipi=(okunan.get("fatura_tipi") or "").upper() or None,
     )
@@ -856,6 +862,7 @@ def _xml_ile_guncelle(db: Session, f: Fatura, okunan: dict, santiyeler) -> Fatur
     oneri = okunan.get("onerilen_gider_turu")
     f.gider_turu = f.gider_turu or (oneri if oneri in GIDER_TURLERI else None)
     f.tevkifat, f.diger_vergiler = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0
+    f.stopaj = okunan.get("stopaj") or 0
     f.yuvarlama = okunan.get("yuvarlama") or 0
     f.para_birimi, f.kur = _para_birimi(okunan), _kur(okunan) or f.kur
     f.fatura_tipi = (okunan.get("fatura_tipi") or "").upper() or f.fatura_tipi

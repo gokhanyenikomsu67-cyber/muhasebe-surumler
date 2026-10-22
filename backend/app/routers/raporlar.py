@@ -203,7 +203,7 @@ def _excel(sayfa_adi: str, basliklar: list[str], satirlar: list[list], dosya_adi
             for hucre in ws[ws.max_row]:
                 hucre.font, hucre.fill = Font(bold=True), ARA_TOPLAM_DOLGU
     for i, b in enumerate(basliklar, start=1):
-        uzunluk = max([len(str(b))] + [len(str(s[i - 1])) for s in satirlar if s[i - 1] is not None])
+        uzunluk = max([len(str(b))] + [len(str(s[i - 1])) for s in satirlar if len(s) >= i and s[i - 1] is not None])
         ws.column_dimensions[ws.cell(1, i).column_letter].width = min(uzunluk + 2, 60)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
@@ -274,11 +274,11 @@ async def excel_cari_yukle(dosya: UploadFile = File(...), db: Session = Depends(
 def excel_faturalar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
     faturalar = db.scalars(select(Fatura).where(Fatura.sirket_id == k.sirket_id).order_by(Fatura.tarih)).all()
     basliklar = ["Tarih", "Fatura No", "Tür", "Durum", "Cari", "VKN", "Şantiye", "Gider Türü",
-                 "Ara Toplam", "KDV", "Tevkifat", "Diğer Vergiler", "Genel Toplam", "Para Birimi", "Fatura Tipi", "Kur",
+                 "Ara Toplam", "KDV", "Tevkifat", "Stopaj", "Diğer Vergiler", "Genel Toplam", "Para Birimi", "Fatura Tipi", "Kur",
                  "Genel Toplam (TL)"]
     satirlar = [[f.tarih, f.fatura_no, "Alış" if f.yon == "gelen" else "Satış", {"onayli": "Onaylı", "iptal": "İptal"}.get(f.durum, "Taslak"),
                  f.cari.unvan if f.cari else None, f.cari.vkn if f.cari else None, f.santiye.ad if f.santiye else None,
-                 f.gider_turu, float(f.ara_toplam), float(f.kdv_toplam), float(f.tevkifat), float(f.diger_vergiler or 0), float(f.genel_toplam), f.para_birimi,
+                 f.gider_turu, float(f.ara_toplam), float(f.kdv_toplam), float(f.tevkifat), float(f.stopaj or 0), float(f.diger_vergiler or 0), float(f.genel_toplam), f.para_birimi,
                  f.fatura_tipi, float(f.kur) if f.kur else None, round(float(f.genel_toplam) * tl_kur(f), 2)]
                 for f in faturalar]
     return _excel("Faturalar", basliklar, satirlar, "faturalar")
@@ -351,7 +351,7 @@ def excel_fatura_kalemleri(db: Session = Depends(get_db), k: Kullanici = Depends
     basliklar = ["Fatura Tarihi", "Fatura No", "Fatura Türü", "Cari Ünvan", "Cari VKN", "Şantiye (Proje)",
                  "Sıra No", "Mal Hizmet Adı", "Miktar", "Birim", "Birim Fiyat", "İskonto Oranı", "İskonto Tutarı",
                  "KDV Oranı", "KDV Tutarı", "Mal Hizmet Tutarı",
-                 "Tevkifat Oranı", "Tevkifat Kodu", "Tevkifat Tutarı"]
+                 "Tevkifat Oranı", "Tevkifat Kodu", "Tevkifat Tutarı", "Stopaj Oranı", "Stopaj Tutarı"]
     satirlar = []
     for f in sorted(_onayli(db, k), key=lambda f: (f.tarih or date.min, f.id)):
         for sira, kl in enumerate(f.kalemler, 1):
@@ -361,7 +361,9 @@ def excel_fatura_kalemleri(db: Session = Depends(get_db), k: Kullanici = Depends
                              kl.birim, float(kl.birim_fiyat), float(kl.iskonto_orani or 0), float(kl.iskonto_tutari or 0),
                              float(kl.kdv_orani), round(kl.kdv, 2), float(kl.tutar),
                              f"{float(kl.tevkifat_orani):g}/10" if float(kl.tevkifat_orani or 0) else None, kl.tevkifat_kodu,
-                             kural.tevkifat_tutari(kl.tutar, kl.kdv_orani, kl.tevkifat_orani, kl.kdv_tutari) or None])
+                             kural.tevkifat_tutari(kl.tutar, kl.kdv_orani, kl.tevkifat_orani, kl.kdv_tutari) or None,
+                             f"%{float(kl.stopaj_orani):g}" if float(kl.stopaj_orani or 0) else None,
+                             kural.stopaj_tutari(kl.tutar, kl.stopaj_orani) or None])
     return _excel("Fatura Kalemleri", basliklar, satirlar, "fatura-kalemleri")
 
 

@@ -291,12 +291,12 @@ def fatura_kopyala(fatura_id: int, db: Session = Depends(get_db), k: Kullanici =
     f = Fatura(sirket_id=k.sirket_id, yon=eski.yon, durum="taslak", tarih=bugun,
                vade=bugun + (eski.vade - eski.tarih) if eski.vade and eski.tarih else None,
                fatura_no=sonraki_no(eski.yon, db, k)["fatura_no"] if eski.yon == "giden" else None,
-               cari_id=eski.cari_id, santiye_id=eski.santiye_id, gider_turu=eski.gider_turu, tevkifat=eski.tevkifat or 0,
+               cari_id=eski.cari_id, santiye_id=eski.santiye_id, gider_turu=eski.gider_turu, tevkifat=eski.tevkifat or 0, stopaj=eski.stopaj or 0,
                diger_vergiler=eski.diger_vergiler or 0, yuvarlama=0, para_birimi=eski.para_birimi, aciklama=eski.aciklama)
     kalemleri_yaz(f, [schemas.KalemGiris(
         aciklama=kl.aciklama, miktar=float(kl.miktar), birim=kl.birim, birim_fiyat=float(kl.birim_fiyat),
         kdv_orani=float(kl.kdv_orani), tutar=float(kl.tutar), santiye_id=kl.santiye_id,
-        tevkifat_orani=float(kl.tevkifat_orani or 0), tevkifat_kodu=kl.tevkifat_kodu,
+        tevkifat_orani=float(kl.tevkifat_orani or 0), tevkifat_kodu=kl.tevkifat_kodu, stopaj_orani=float(kl.stopaj_orani or 0),
         kdv_tutari=float(kl.kdv_tutari) if kl.kdv_tutari is not None else None,
         iskonto_orani=float(kl.iskonto_orani or 0), iskonto_tutari=float(kl.iskonto_tutari or 0)) for kl in eski.kalemler])
     db.add(f)

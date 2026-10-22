@@ -23,7 +23,7 @@ from . import kural, schemas
 from .db import VERI_KLASORU, SessionLocal
 from .models import Cari, Fatura, Sirket
 
-SURUM = 13
+SURUM = 14
 UYDURMA_SATIR = "KDV'siz / istisna tutar"  # eski sürüm toplam farkını bu satırla kapatıyordu
 RAPOR = VERI_KLASORU / "onarim-raporu.json"
 
@@ -243,7 +243,7 @@ def onar(db, sirket: Sirket, eski_surum: int = 0) -> dict:
         if not okunan:
             continue
         # Yeni sürüm de okuyamıyorsa geçici satır silinir (kullanıcı kuralı); fatura kırmızı kalır, kalemler elle girilir.
-        f.tevkifat, f.diger_vergiler = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0
+        f.tevkifat, f.diger_vergiler, f.stopaj = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0, okunan.get("stopaj") or 0
         f.yuvarlama, f.aciklama = okunan.get("yuvarlama") or 0, f.aciklama or okunan.get("aciklama")
         santiye = next((k.santiye_id for k in f.kalemler if k.santiye_id), None)
         kalemleri_yaz(f, [kalem_giris(k, santiye) for k in okunan["kalemler"]])
@@ -268,7 +268,7 @@ def onar(db, sirket: Sirket, eski_surum: int = 0) -> dict:
         kalemleri_yaz(f, [schemas.KalemGiris(
             aciklama=kl.aciklama, miktar=float(kl.miktar), birim=kl.birim, birim_fiyat=float(kl.birim_fiyat),
             kdv_orani=float(kl.kdv_orani), tutar=float(kl.tutar), santiye_id=kl.santiye_id, tevkifat_orani=float(kl.tevkifat_orani or 0),
-            tevkifat_kodu=kl.tevkifat_kodu, kdv_tutari=x.get("kdv_tutari"), iskonto_orani=float(kl.iskonto_orani or 0),
+            tevkifat_kodu=kl.tevkifat_kodu, stopaj_orani=float(kl.stopaj_orani or 0), kdv_tutari=x.get("kdv_tutari"), iskonto_orani=float(kl.iskonto_orani or 0),
             iskonto_tutari=float(kl.iskonto_tutari or 0)) for kl, x in zip(f.kalemler, satirlar)])
         kdv_fatura.append(f.fatura_no or str(f.id))
         db.commit()
@@ -358,7 +358,7 @@ def _sorunlu_taslaklari_oku(db, sirket: Sirket) -> list[str]:
             c, _ = cari_bul_ya_ac(db, SimpleNamespace(sirket_id=sirket.id), karsi, "tedarikci" if f.yon == "gelen" else "musteri")
             if c:
                 f.cari = c
-        f.tevkifat, f.diger_vergiler = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0
+        f.tevkifat, f.diger_vergiler, f.stopaj = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0, okunan.get("stopaj") or 0
         f.yuvarlama, f.aciklama = okunan.get("yuvarlama") or 0, f.aciklama or okunan.get("aciklama")
         if (okunan.get("para_birimi") or "TRY") == (f.para_birimi or "TRY") and okunan.get("kur") and not float(f.kur or 0):
             f.kur = okunan["kur"]
@@ -411,7 +411,7 @@ def _sorunlu_onaylilari_oku(db, sirket: Sirket) -> tuple[list[str], list[str]]:
         eski_genel = float(f.genel_toplam or 0)
         santiye = next((k.santiye_id for k in f.kalemler if k.santiye_id), None) or f.santiye_id
         nokta = db.begin_nested()
-        f.tevkifat, f.diger_vergiler = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0
+        f.tevkifat, f.diger_vergiler, f.stopaj = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0, okunan.get("stopaj") or 0
         f.yuvarlama, f.aciklama = okunan.get("yuvarlama") or 0, f.aciklama or okunan.get("aciklama")
         kalemleri_yaz(f, [kalem_giris(k, santiye) for k in okunan["kalemler"]])
         db.flush()

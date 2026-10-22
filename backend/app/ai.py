@@ -307,11 +307,11 @@ def tutarlilik_uyarilari(veri: dict) -> list[str]:
     kalem_toplami += veri.get("yuvarlama") or 0  # satıcının kendi kuruş yuvarlaması (kural.pdf_fatura_oku)
     if ara is not None and veri.get("kalemler") and abs(kalem_toplami - ara) > 0.05:
         uyarilar.append(f"Kalemlerin toplamı ({kalem_toplami:.2f}) ara toplamla ({ara:.2f}) tutmuyor.")
-    kdv, genel, tevk = veri.get("kdv_toplam"), veri.get("genel_toplam"), veri.get("tevkifat") or 0
+    kdv, genel, tevk = veri.get("kdv_toplam"), veri.get("genel_toplam"), (veri.get("tevkifat") or 0) + (veri.get("stopaj") or 0)
     diger = veri.get("diger_vergiler") or 0
     if None not in (ara, kdv, genel) and abs(ara + kdv - tevk + diger - genel) > 0.05:
         uyarilar.append(
-            f"Ara toplam + KDV - tevkifat + diğer vergiler ({ara + kdv - tevk + diger:.2f}) genel toplamla ({genel:.2f}) tutmuyor."
+            f"Ara toplam + KDV - tevkifat/stopaj + diğer vergiler ({ara + kdv - tevk + diger:.2f}) genel toplamla ({genel:.2f}) tutmuyor."
         )
     if not veri.get("belge_fatura_mi", True):
         uyarilar.append("Yüklenen belge fatura gibi görünmüyor.")

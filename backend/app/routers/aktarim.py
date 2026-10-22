@@ -19,7 +19,7 @@ from .raporlar import _excel
 router = APIRouter(prefix="/api/excel")
 
 FATURA_SUTUNLARI = ["Fatura No", "Tarih", "Vade", "Tür (Alış/Satış)", "Cari Ünvan", "Cari VKN", "Şantiye", "Gider Türü",
-                    "Kalem Açıklaması", "Miktar", "Birim", "Birim Fiyat", "KDV %", "Tevkifat"]
+                    "Kalem Açıklaması", "Miktar", "Birim", "Birim Fiyat", "KDV %", "Tevkifat", "Stopaj"]
 # Şablon dışındaki listelerde (ör. Wolvox/muhasebe programından alınan "fatura listesi") geçen başlıklar.
 FATURA_ES_ANLAMLILAR = {
     "Tarih": ["Tarihi", "Fatura Tarihi", "Belge Tarihi"],
@@ -132,9 +132,9 @@ def _kdv_orani(haric: float | None, dahil: float | None) -> float | None:
 @router.get("/fatura-sablon")
 def fatura_sablon(k: Kullanici = Depends(aktif_kullanici)):
     ornek = [["ABC2026000000001", "01.10.2026", "31.10.2026", "Alış", "Örnek Beton A.Ş.", "1234567890", "", "Beton",
-              "C30 hazır beton", 10, "m3", 2500, 20, 0],
+              "C30 hazır beton", 10, "m3", 2500, 20, 0, 0],
              ["ABC2026000000001", "01.10.2026", "31.10.2026", "Alış", "Örnek Beton A.Ş.", "1234567890", "", "Beton",
-              "Pompa", 1, "adet", 3000, 20, 0]]
+              "Pompa", 1, "adet", 3000, 20, 0, 0]]
     return _excel("Faturalar", FATURA_SUTUNLARI, ornek, "fatura-yukleme-sablonu")
 
 
@@ -182,7 +182,7 @@ async def fatura_yukle(dosya: UploadFile = File(...), yon: str = Query("gelen", 
                     yon=satir_yon, fatura_no=str(r["Fatura No"]).strip() if r.get("Fatura No") else None, tarih=tarih,
                     vade=kural.tarih_coz(r.get("Vade")), cari_id=cari.id if cari else None,
                     santiye_id=santiyeler.bul(r.get("Şantiye")), gider_turu=gider,
-                    tevkifat=kural.para_coz(r.get("Tevkifat")) or 0, kalemler=[]), "satir": r["_satir"]}
+                    tevkifat=kural.para_coz(r.get("Tevkifat")) or 0, stopaj=kural.para_coz(r.get("Stopaj")) or 0, kalemler=[]), "satir": r["_satir"]}
             gruplar[anahtar]["f"].kalemler.append(schemas.KalemGiris(
                 aciklama=str(r.get("Kalem Açıklaması") or "-"), miktar=miktar, birim=r.get("Birim"),
                 birim_fiyat=fiyat, kdv_orani=20 if kdv is None else kdv, tutar=haric))
