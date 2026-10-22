@@ -183,6 +183,16 @@ class RedFatura(Base):
     olusturma: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Malzeme(Base):
+    """Malzeme (stok adı) kartı: faturalarda biraz farklı yazılan aynı malzemenin adları bir kartta toplanır
+    (eski_adlar = kalemlerde geçen öteki yazılışlar, satır satır). Kalem kendi adını korur; karta adıyla bağlanır."""
+    __tablename__ = "malzemeler"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    ad: Mapped[str] = mapped_column(String(255))
+    eski_adlar: Mapped[str | None] = mapped_column(Text)
+
+
 class FaturaKalem(Base):
     __tablename__ = "fatura_kalemleri"
     id: Mapped[int] = mapped_column(primary_key=True)

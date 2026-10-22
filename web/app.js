@@ -784,6 +784,168 @@ function virmanRaporuAc() {
   });
 }
 
+// ---------------------------------------------------------------- malzemeler
+// Faturalarda biraz farklı yazılmış aynı malzeme tek kartta toplanır; benzer adlar toplu sorulur.
+function malzemeEslestirmeAc() {
+  sekmeAc("malzeme-eslestirme", "Benzer Malzemeler", {
+    async ciz(el) {
+      let bekleyen;
+      try { bekleyen = await api("/api/malzemeler/bekleyen"); } catch (e) { return bildir(e.message, true); }
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Benzer Malzemeler")));
+      if (!bekleyen.length) {
+        el.append(h("p", {}, "Eşleştirilecek benzer malzeme adı yok. Faturalardaki kalemler malzeme kartlarına bağlı."),
+          h("button", { class: "dugme", onclick: () => malzemeRaporuAc("gelen") }, "Malzeme Bazlı Alışlar"));
+        return durum("Benzer malzeme adı yok");
+      }
+      const secimler = bekleyen.map((b) => h("select", {},
+        [...b.oneriler.map((o, i) => [o.id, `${o.ad}${i === 0 ? " (önerilen)" : ""}`]), ["", "Ayrı malzeme (yeni kart aç)"]]
+          .map(([d, m], i) => h("option", { value: d, selected: i === 0 }, m))));
+      const uygula = async (hepsiAyri) => {
+        const kararlar = bekleyen.map((b, i) => ({ ad: b.ad, malzeme_id: hepsiAyri ? null : Number(secimler[i].value) || null }));
+        try {
+          const r = await api("/api/malzemeler/esle", { metod: "POST", veri: { kararlar } });
+          bildir(`${r.eslenen} ad var olan malzemeye işlendi${r.ayri ? `, ${r.ayri} ayrı malzeme açıldı` : ""}.`);
+          listeyiTazele("malzeme-kartlari");
+          listeyiTazele("rapor-malzeme-gelen");
+          listeyiTazele("rapor-malzeme-giden");
+          yenidenCiz();
+        } catch (e) { bildir(e.message, true); }
+      };
+      el.append(
+        ACIKLAMA("Bu adlar kayıtlı bir malzemeye çok benziyor. Hangi malzemeye işleneceğini seçin; ayrı bir malzemeyse \"Ayrı malzeme\" seçin. Kararınız hatırlanır, aynı ad bir daha sorulmaz. Faturadaki kalem adı değişmez."),
+        h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Faturadaki ad", "Kalem sayısı", "Hangi malzemeye işlensin?"].map((b) => h("th", {}, b)))),
+          h("tbody", {}, bekleyen.map((b, i) => h("tr", {}, h("td", { style: "white-space:normal" }, b.ad), h("td", { class: "sayi" }, b.kalem_sayisi), h("td", {}, secimler[i])))))),
+        h("div", { style: "display:flex;gap:8px;margin-top:10px" },
+          h("button", { class: "dugme ana", onclick: () => uygula(false) }, "Seçilenlerle uygula"),
+          h("button", { class: "dugme", onclick: () => { if (confirm("Hepsi ayrı malzeme olarak açılsın mı?")) uygula(true); } }, "Hepsinde ayrı malzeme")));
+      durum(`${bekleyen.length} benzer ad onay bekliyor`);
+    },
+    yenile: () => yenidenCiz(),
+  });
+}
+
+// Fatura onayından sonra: benzer malzeme adı varsa bir kez sorar (sayı değişmedikçe aynı oturumda tekrar sormaz).
+async function benzerMalzemeKontrol() {
+  let bekleyen;
+  try { bekleyen = await api("/api/malzemeler/bekleyen"); } catch { return; }
+  const anahtar = bekleyen.map((b) => b.ad).join("|");
+  if (!bekleyen.length || benzerMalzemeKontrol.sorulan === anahtar) return;
+  benzerMalzemeKontrol.sorulan = anahtar;
+  const sec = await secimSor("Benzer malzeme adları var",
+    h("div", {}, `${bekleyen.length} kalem adı kayıtlı bir malzemeye benziyor`, h("ul", {}, bekleyen.slice(0, 5).map((b) => h("li", {}, `${b.ad} → ${b.oneriler[0].ad}`))),
+      bekleyen.length > 5 ? `ve ${bekleyen.length - 5} ad daha.` : "", " Şimdi eşleştirelim mi?"),
+    [["evet", "Eşleştir", true], [null, "Sonra"]]);
+  if (sec === "evet") malzemeEslestirmeAc();
+}
+
+function malzemeRaporuAc(yon = "gelen") {
+  const ad = yon === "giden" ? "Malzeme Bazlı Satışlar" : "Malzeme Bazlı Alışlar";
+  const filtre = { cari: "", santiye: "", baslangic: "", bitis: "" };
+  const acik = new Set();
+  const sorgu = () => {
+    const q = new URLSearchParams({ yon });
+    if (filtre.cari) q.set("cari_id", filtre.cari);
+    if (filtre.santiye) q.set("santiye_id", filtre.santiye);
+    if (filtre.baslangic) q.set("baslangic", filtre.baslangic);
+    if (filtre.bitis) q.set("bitis", filtre.bitis);
+    return q.toString();
+  };
+  sekmeAc(`rapor-malzeme-${yon}`, ad, {
+    async ciz(el) {
+      let cariler, santiyeler, veri;
+      try { [cariler, santiyeler, veri] = await Promise.all([api("/api/cariler"), api("/api/santiyeler"), api(`/api/raporlar/malzeme?${sorgu()}`)]); }
+      catch (e) { return bildir(e.message, true); }
+      const cariS = h("select", { onchange: (e) => (filtre.cari = e.target.value) },
+        [["", "— Tüm firmalar —"], ...cariler.map((c) => [c.id, c.unvan])].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre.cari }, m)));
+      const santiyeS = h("select", { onchange: (e) => (filtre.santiye = e.target.value) },
+        [["", "— Tüm şantiyeler —"], ...santiyeler.map((s) => [s.id, s.ad])].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre.santiye }, m)));
+      const tarihK = (alan) => h("input", { type: "date", value: filtre[alan], onchange: (e) => (filtre[alan] = e.target.value) });
+      const bekleyen = veri.ozet.filter((x) => x.eslesme_bekliyor).length;
+      const miktar = (v, b) => `${Number(v).toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${b === "-" ? "" : b}`;
+      const govde = [];
+      for (const x of veri.ozet) {
+        const k = `${x.malzeme_id || x.malzeme}|${x.birim}`;
+        govde.push(h("tr", { style: "cursor:pointer", title: "Kalemleri görmek için tıklayın", onclick: () => { acik.has(k) ? acik.delete(k) : acik.add(k); yenidenCiz(); } },
+          h("td", { style: "white-space:normal;min-width:220px" }, `${acik.has(k) ? "▾" : "▸"} ${x.malzeme}`,
+            x.eslesme_bekliyor ? h("span", { class: "etiket taslak", style: "margin-left:6px" }, "benzer ad, eşleştirilmedi") : "",
+            x.yazilislar.length > 1 ? h("div", { style: "color:#4a5866;font-size:12px" }, `${x.yazilislar.length} farklı yazılış`) : ""),
+          h("td", { class: "sayi" }, miktar(x.miktar, x.birim)), h("td", { class: "sayi" }, para(x.tutar)),
+          h("td", { class: "sayi" }, x.ortalama_fiyat != null ? para(x.ortalama_fiyat) : ""),
+          h("td", { class: "sayi" }, x.fatura_sayisi), h("td", { class: "sayi" }, x.cari_sayisi)));
+        if (acik.has(k)) {
+          for (const r of veri.ayrinti.filter((r) => (r.malzeme_id || r.malzeme) === (x.malzeme_id || x.malzeme) && r.birim === x.birim)) {
+            govde.push(h("tr", { ondblclick: () => faturaFormAc({ id: r.fatura_id }, null) },
+              h("td", { style: "white-space:normal;padding-left:24px;color:#4a5866" }, `${tarih(r.tarih)} · ${r.fatura_no || ""} · ${r.cari || ""}${r.santiye ? ` · ${r.santiye}` : ""} · ${r.kalem}`),
+              h("td", { class: "sayi" }, miktar(r.miktar, r.birim)), h("td", { class: "sayi" }, para(r.tutar)),
+              h("td", { class: "sayi" }, r.birim_fiyat != null ? para(r.birim_fiyat) : ""), h("td", {}), h("td", {})));
+          }
+        }
+      }
+      el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, ad),
+          "Firma:", cariS, "Şantiye:", santiyeS, "Tarih:", tarihK("baslangic"), "–", tarihK("bitis"),
+          h("button", { class: "dugme ana", onclick: () => yenidenCiz() }, "Ara"),
+          h("button", { class: "dugme", onclick: () => { Object.keys(filtre).forEach((a) => (filtre[a] = "")); yenidenCiz(); } }, "Temizle"),
+          h("button", { class: "dugme", onclick: () => this.excel() }, "Excel'e aktar (F9)"),
+          h("button", { class: "dugme", onclick: () => malzemeListesiAc() }, "Malzeme kartları")),
+        bekleyen ? h("div", { class: "uyari-satiri" }, `${bekleyen} kalem adı kayıtlı bir malzemeye benziyor ve henüz eşleştirilmedi. `,
+          h("button", { class: "dugme ana", onclick: () => malzemeEslestirmeAc() }, "Eşleştir")) : "",
+        veri.ozet.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Malzeme", "Toplam Miktar", "Toplam Tutar (KDV hariç)", "Ortalama Birim Fiyat", "Fatura", "Firma"]
+            .map((b, i) => h("th", { class: i ? "sayi" : "" }, b)))),
+          h("tbody", {}, govde),
+          h("tfoot", {}, h("tr", {}, h("td", {}, "Genel toplam"), h("td", {}), h("td", { class: "sayi" }, para(veri.ozet.reduce((t, x) => t + x.tutar, 0))), h("td", { colspan: 3 })))))
+          : h("p", {}, "Bu seçime uyan onaylı fatura kalemi yok."),
+        ACIKLAMA(`Onaylı ${yon === "giden" ? "satış" : "alış"} faturalarının kalemleri malzemeye göre toplanır; dövizli faturalar TL'ye çevrilir, iade faturaları düşülür. Satıra tıklayınca kalemler açılır.`));
+      aramaliSec(cariS, { bosYazi: "— Tüm firmalar —" });
+      durum(`${veri.ozet.length} malzeme listelendi`);
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => indir(`/api/excel/malzeme?${sorgu()}`, `${yon === "giden" ? "malzeme-satislari" : "malzeme-alislari"}.xlsx`),
+  });
+}
+
+function malzemeListesiAc() {
+  const secili = new Set();
+  sekmeAc("malzeme-kartlari", "Malzeme Kartları", {
+    async ciz(el) {
+      let kartlar;
+      try { kartlar = await api("/api/malzemeler"); } catch (e) { return bildir(e.message, true); }
+      const islem = async (yol, veri, mesaj, metod = "POST") => {
+        try { await api(yol, { metod, veri }); bildir(mesaj); listeyiTazele("rapor-malzeme-gelen"); listeyiTazele("rapor-malzeme-giden"); yenidenCiz(); }
+        catch (e) { bildir(e.message, true); }
+      };
+      const birlestir = async () => {
+        const secilen = kartlar.filter((m) => secili.has(m.id));
+        if (secilen.length < 2) return bildir("Birleştirmek için en az iki malzeme seçin.", true);
+        const hedef = await secimSor("Malzemeleri birleştir", "Seçilen malzemeler tek kartta toplanacak. Kartın adı hangisi olsun?",
+          [...secilen.map((m, i) => [m.id, m.ad, i === 0]), [null, "Vazgeç"]]);
+        if (hedef == null) return;
+        secili.clear();
+        islem(`/api/malzemeler/${hedef}/birlestir`, { idler: secilen.map((m) => m.id) }, `${secilen.length} malzeme birleştirildi.`);
+      };
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Malzeme Kartları"),
+          h("button", { class: "dugme ana", onclick: birlestir }, "Seçilenleri birleştir"),
+          h("button", { class: "dugme", onclick: () => malzemeEslestirmeAc() }, "Benzer adları eşleştir"),
+          h("button", { class: "dugme", onclick: () => malzemeRaporuAc("gelen") }, "Malzeme Bazlı Alışlar")),
+        ACIKLAMA("Faturalardaki aynı malzemenin farklı yazılışları bir kartta toplanır. Yanlış toplanan yazılışı × ile karttan çıkarabilirsiniz; o ad yeniden sorulur."),
+        h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["", "Malzeme", "Faturadaki öteki yazılışlar", ""].map((b) => h("th", {}, b)))),
+          h("tbody", {}, kartlar.map((m) => h("tr", {},
+            h("td", {}, h("input", { type: "checkbox", checked: secili.has(m.id), onchange: (e) => (e.target.checked ? secili.add(m.id) : secili.delete(m.id)) })),
+            h("td", { style: "white-space:normal;min-width:200px" }, m.ad),
+            h("td", { style: "white-space:normal" }, m.eski_adlar.map((a) => h("span", { class: "etiket", style: "margin:2px;display:inline-block" }, a, " ",
+              h("a", { href: "#", title: "Bu yazılışı karttan çıkar", onclick: (e) => { e.preventDefault(); islem(`/api/malzemeler/${m.id}/ad-cikar`, { ad: a }, `'${a}' karttan çıkarıldı.`); } }, "×")))),
+            h("td", {}, h("button", { class: "dugme", onclick: () => {
+              const yeni = prompt("Malzemenin yeni adı:", m.ad);
+              if (yeni && yeni.trim() !== m.ad) islem(`/api/malzemeler/${m.id}`, { ad: yeni.trim() }, "Malzeme adı değişti.", "PUT");
+            } }, "✎ Düzenle"))))))));
+      durum(`${kartlar.length} malzeme`);
+    },
+    yenile: () => yenidenCiz(),
+  });
+}
+
 // ---------------------------------------------------------------- faturalar
 function faturaListesiAc(yon) {
   const ad = yon === "gelen" ? "Alış Faturaları" : "Satış Faturaları";
@@ -806,6 +968,7 @@ function faturaListesiAc(yon) {
           const r = await api("/api/faturalar/toplu-onayla", { metod: "POST", veri: { idler: taslaklar.map((f) => f.id) } });
           bildir(`${r.onaylanan} fatura onaylandı${r.hatalar.length ? `, ${r.hatalar.length} fatura onaylanamadı: ${r.hatalar[0]}` : ""}.`, !!r.hatalar.length);
           yenile();
+          if (r.onaylanan) benzerMalzemeKontrol();
         } catch (e) { bildir(e.message, true); }
       } }, "Bekleyenlerin hepsini onayla")),
     kolonlar: [
@@ -1474,6 +1637,7 @@ function faturaFormAc(fatura, yon) {
         sekmeKapat(s);
         listeyiTazele(`faturalar-${fatura.yon}`);
         listeyiTazele("ai-okuma");
+        benzerMalzemeKontrol();
       } catch (e) { bildir(e.message, true); yenidenCiz(); }
     },
   });
@@ -1753,6 +1917,7 @@ function aiOkumaAc() {
               const r = await api("/api/faturalar/toplu-onayla", { metod: "POST", veri: { idler } });
               bildir(`${r.onaylanan} fatura onaylandı ve deftere işlendi${r.hatalar.length ? `. ${r.hatalar.length} fatura onaylanamadı: ${r.hatalar[0]}` : "."}`, !!r.hatalar.length);
               listeyiTazele(`faturalar-${yon}`);
+              if (r.onaylanan) benzerMalzemeKontrol();
             } else if (islem === "sil") {
               if (!confirm(`Seçilen ${idler.length} fatura silinsin mi?`)) return;
               const r = await api("/api/faturalar/toplu-sil", { metod: "POST", veri: { idler } });
@@ -3967,6 +4132,8 @@ function verileriSifirla() {
 // ---------------------------------------------------------------- modül menüsü
 const MODULLER = [
   ["Fatura", [["Belgeden Fatura Oku", aiOkumaAc], ["Alış Faturaları", () => faturaListesiAc("gelen")], ["Satış Faturaları", () => faturaListesiAc("giden")]]],
+  ["Malzeme", [["Malzeme Bazlı Alışlar", () => malzemeRaporuAc("gelen")], ["Malzeme Bazlı Satışlar", () => malzemeRaporuAc("giden")],
+    ["Benzer Malzemeleri Eşleştir", malzemeEslestirmeAc], ["Malzeme Kartları", malzemeListesiAc]]],
   ["Günlük Takip", [["Hızlı Arama (F3)", () => hizliAramaAc()], ["Ödeme Takvimi / Nakit Akışı", odemeTakvimiAc], ["Düzenli Ödemeler", duzenliOdemelerAc]]],
   ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Taşeron Hesabı", () => taseronAc()], ["Mutabakat", mutabakatAc]]],
   ["Şantiye", [["Şantiyeler", santiyeListesiAc], ["Depolar (taşeronlar)", depoListesiAc], ["Şantiye Bazlı Faturalar", santiyeFaturalariAc], ["Depo Bazlı Harcamalar", depoRaporuAc],
