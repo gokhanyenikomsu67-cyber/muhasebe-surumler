@@ -1,5 +1,5 @@
 """Program sürümü: paket (git archive) çıkarılırken tarih ve kısa kayıt kodu yazılır; ekranın altında görünür."""
-_HAM = "2026-10-22 7ace8ce"
+_HAM = "2026-10-22 09f4015"
 SURUM = "geliştirme" if _HAM.startswith("$") else _HAM
 
 
