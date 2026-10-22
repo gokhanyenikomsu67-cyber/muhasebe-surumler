@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from .models import HAREKET_TURLERI, BankaHesabi, Fatura, Hareket
+from .models import HAREKET_TURLERI, BankaHesabi, Depo, Fatura, FaturaKalem, Hareket, TaseronGider
 
 MASRAF_TURLERI = ("masraf", "banka_masrafi")
 
@@ -39,6 +39,41 @@ def fatura_vadesi(f: Fatura) -> date | None:
     if f.tarih and f.cari and f.cari.vade_gun:
         return f.tarih + timedelta(days=f.cari.vade_gun)
     return f.tarih
+
+
+def kalem_toplami(f: Fatura, kl: FaturaKalem) -> float:
+    """Kalemin KDV dahil maliyeti (faturanın tevkifat/stopaj/diğer vergi farkı kalem tutarı oranında paylaştırılır),
+    faturanın biriminde."""
+    ara = sum(float(x.tutar) for x in f.kalemler)
+    ek = float(f.genel_toplam) - ara - sum(x.kdv for x in f.kalemler)
+    oran = float(kl.tutar) / ara if ara else 1 / len(f.kalemler)
+    return float(kl.tutar) + kl.kdv + ek * oran
+
+
+def depo_kalemleri(db: Session, sirket_id: int, cari_id: int | None = None, depo_id: int | None = None) -> list[dict]:
+    """Onaylı alış faturalarında depoya ayrılmış kalemler (TL karşılığıyla). İade faturasında tutar eksidir.
+    Depoya cari bağlıysa bu tutarlar o cariye borç yazılır; faturanın kendi carisi değişmez."""
+    q = select(FaturaKalem, Fatura, Depo).join(Fatura, FaturaKalem.fatura_id == Fatura.id).join(Depo, FaturaKalem.depo_id == Depo.id) \
+        .where(Fatura.sirket_id == sirket_id, Fatura.durum == "onayli")
+    if cari_id is not None:
+        q = q.where(Depo.cari_id == cari_id)
+    if depo_id is not None:
+        q = q.where(Depo.id == depo_id)
+    satirlar = []
+    for kl, f, d in db.execute(q.order_by(Fatura.tarih, Fatura.id, FaturaKalem.id)):
+        if satis_tarafi(f):
+            continue
+        kur, i = tl_kur(f), isaret(f)
+        satirlar.append({"depo_id": d.id, "depo": d.ad, "cari_id": d.cari_id, "santiye_id": kl.santiye_id or f.santiye_id,
+                         "fatura_id": f.id, "tarih": f.tarih, "fatura_no": f.fatura_no,
+                         "satici": f.cari.unvan if f.cari else None, "kalem": kl.aciklama,
+                         "miktar": float(kl.miktar or 0), "birim": kl.birim,
+                         "tutar": round(i * float(kl.tutar) * kur, 2), "kdv": round(i * kl.kdv * kur, 2),
+                         "toplam": round(i * kalem_toplami(f, kl) * kur, 2), "kalem_id": kl.id})
+    return satirlar
+
+
+TASERON_GIDER_ADLARI = {"elden": "Elden harcama", "personel": "Personel ücreti / SGK"}
 
 
 def cari_hareketleri(db: Session, sirket_id: int, cari_id: int | None = None) -> list[dict]:
@@ -72,6 +107,37 @@ def cari_hareketleri(db: Session, sirket_id: int, cari_id: int | None = None) ->
                          "aciklama": HAREKET_TURLERI.get(h.tur, h.tur) + (f" - {h.aciklama}" if h.aciklama else ""),
                          "borc": 0.0 if giris else tutar, "alacak": tutar if giris else 0.0,
                          "fatura_id": None, "hareket_id": h.id, "sira": (1, h.id, 1)})
+    # Taşeron adına harcananlar: depoya ayrılan fatura kalemleri ve faturasız giderler cariye borç yazılır
+    depolu: dict[tuple, dict] = {}
+    for d in depo_kalemleri(db, sirket_id, cari_id):
+        if d["cari_id"] is None:
+            continue
+        s = depolu.setdefault((d["cari_id"], d["fatura_id"]), {
+            "cari_id": d["cari_id"], "tarih": d["tarih"], "belge": d["fatura_no"],
+            "aciklama": f"Adına harcanan malzeme ({d['depo']}, satıcı: {d['satici'] or '-'})",
+            "borc": 0.0, "alacak": 0.0, "fatura_id": None, "hareket_id": None, "depo_fatura_id": d["fatura_id"],
+            "sira": (2, d["fatura_id"], 0)})
+        s["borc"] = round(s["borc"] + d["toplam"], 2)
+    for s in depolu.values():
+        if s["borc"] < 0:  # iade fazla: borç azalır
+            s["borc"], s["alacak"] = 0.0, -s["borc"]
+        satirlar.append(s)
+    gq = select(TaseronGider).where(TaseronGider.sirket_id == sirket_id)
+    if cari_id is not None:
+        gq = gq.where(TaseronGider.cari_id == cari_id)
+    personel: dict[tuple, dict] = {}
+    for g in db.scalars(gq):
+        if g.tur == "personel":  # bordro ayı tek satır
+            s = personel.setdefault((g.cari_id, g.donem, g.tarih), {
+                "cari_id": g.cari_id, "tarih": g.tarih, "belge": g.donem,
+                "aciklama": f"Personel ücreti ve SGK ({g.donem or g.tarih})", "borc": 0.0, "alacak": 0.0,
+                "fatura_id": None, "hareket_id": None, "sira": (3, g.id, 0)})
+            s["borc"] = round(s["borc"] + float(g.tutar), 2)
+            continue
+        satirlar.append({"cari_id": g.cari_id, "tarih": g.tarih, "belge": None,
+                         "aciklama": "Elden harcama" + (f" - {g.aciklama}" if g.aciklama else ""),
+                         "borc": float(g.tutar), "alacak": 0.0, "fatura_id": None, "hareket_id": None, "sira": (3, g.id, 0)})
+    satirlar.extend(personel.values())
     return satirlar
 
 

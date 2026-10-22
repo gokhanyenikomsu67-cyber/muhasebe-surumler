@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .. import ai, karekod, kural, ocr, schemas, tani
 from ..auth import aktif_kullanici, yazabilir
 from ..db import VERI_KLASORU, get_db
-from ..models import GIDER_TURLERI, Cari, Fatura, FaturaKalem, Kullanici, RedFatura, Santiye, Sirket
+from ..models import GIDER_TURLERI, Cari, Depo, Fatura, FaturaKalem, Kullanici, RedFatura, Santiye, Sirket
 from ..yukleme import dosyayi_oku
 from .temel import sirket_kaydi
 
@@ -52,7 +52,7 @@ def kalemleri_yaz(f: Fatura, kalemler: list[schemas.KalemGiris]):
         pay = max(0.0, min(float(k.tevkifat_orani or 0), 10.0))
         f.kalemler.append(FaturaKalem(
             aciklama=k.aciklama, miktar=k.miktar, birim=k.birim,
-            birim_fiyat=k.birim_fiyat, kdv_orani=k.kdv_orani, tutar=tutar, santiye_id=k.santiye_id,
+            birim_fiyat=k.birim_fiyat, kdv_orani=k.kdv_orani, tutar=tutar, santiye_id=k.santiye_id, depo_id=k.depo_id,
             tevkifat_orani=pay, tevkifat_kodu=(k.tevkifat_kodu or None) if pay else None, kdv_tutari=k.kdv_tutari,
             iskonto_orani=isk_o, iskonto_tutari=isk_t, stopaj_orani=max(0.0, min(float(k.stopaj_orani or 0), 100.0)),
         ))
@@ -262,6 +262,8 @@ def _doldur(db: Session, f: Fatura, veri: schemas.FaturaGiris, k: Kullanici):
             raise HTTPException(400, "Kendi firmanız faturanın carisi olamaz; faturadaki karşı firmayı seçin.")
     for sid in {veri.santiye_id, *(kl.santiye_id for kl in veri.kalemler)} - {None}:
         sirket_kaydi(db, Santiye, sid, k)
+    for did in {kl.depo_id for kl in veri.kalemler} - {None}:
+        sirket_kaydi(db, Depo, did, k)
     for alan, deger in veri.model_dump(exclude={"kalemler"}).items():
         setattr(f, alan, deger)
     f.para_birimi = (f.para_birimi or "TRY").strip().upper()[:3] or "TRY"
@@ -325,6 +327,7 @@ class TopluIslem(BaseModel):
     idler: list[int]
     santiye_id: int | None = None
     gider_turu: str | None = None
+    depo_id: int | None = None  # verilirse bütün kalemler bu depoya ayrılır; 0 = depoyu kaldır (şantiyenin kendisi)
 
 
 @router.post("/toplu-guncelle")
@@ -334,6 +337,7 @@ def toplu_guncelle(istek: TopluIslem, db: Session = Depends(get_db), k: Kullanic
         sirket_kaydi(db, Santiye, istek.santiye_id, k)
     if istek.gider_turu and istek.gider_turu not in GIDER_TURLERI:
         raise HTTPException(422, "Geçersiz gider türü.")
+    depo = sirket_kaydi(db, Depo, istek.depo_id, k) if istek.depo_id else None
     n = 0
     for fid in istek.idler:
         f = sirket_kaydi(db, Fatura, fid, k)
@@ -344,6 +348,12 @@ def toplu_guncelle(istek: TopluIslem, db: Session = Depends(get_db), k: Kullanic
                 kl.santiye_id = None
         if istek.gider_turu:
             f.gider_turu = istek.gider_turu
+        if istek.depo_id is not None:
+            for kl in f.kalemler:
+                kl.depo_id = depo.id if depo else None
+            # Depo bir şantiyeye bağlıysa şantiyesi boş fatura o şantiyeyi alır
+            if depo and depo.santiye_id and not f.santiye_id and not any(kl.santiye_id for kl in f.kalemler):
+                f.santiye_id = depo.santiye_id
         n += 1
     db.commit()
     return {"guncellenen": n}

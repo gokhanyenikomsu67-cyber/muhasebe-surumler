@@ -257,3 +257,4 @@ table.liste tr.tiklanir { cursor: pointer; }
 .toplu-cek .santiye-hucre { min-width: 200px; }
 .red-kutu { flex-wrap: wrap; background: #fdecea; border: 1px solid #e3a59f; padding: 8px; border-radius: 4px; margin: 6px 0; }
 .red-kutu .tablo-kap { flex-basis: 100%; }
+.alt-sekmeler { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; border-bottom: 1px solid var(--gri-kenar); padding-bottom: 6px; }

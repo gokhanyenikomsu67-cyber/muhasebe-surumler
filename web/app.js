@@ -304,6 +304,8 @@ function cariFormAc(cari = null) {
           alan("IBAN", "iban", cari?.iban), alan("Adres", "adres", cari?.adres, { cok_satir: true, genis: true }))),
         h("div", { class: "dugmeler" }, h("button", { class: "dugme ana" }, "Kaydet (F2)"),
           cari ? h("button", { type: "button", class: "dugme", onclick: () => cariEkstreAc(cari) }, "Cari Ekstre") : null,
+          cari ? h("button", { type: "button", class: "dugme", title: "Verilen paralar, adına harcanan fatura kalemleri, elden harcamalar, personel/SGK",
+            onclick: () => taseronAc(cari.id) }, "Taşeron sayfası") : null,
           cari ? h("button", { type: "button", class: "dugme", onclick: () => yazdirAc(`/api/yazdir/mutabakat/${cari.id}`) }, "Mutabakat mektubu") : null,
           cari ? h("button", { type: "button", class: "dugme", onclick: () => yazdirAc(`/api/yazdir/cek-bordro?cari_id=${cari.id}`) }, "Çek bordrosu") : null,
           cari ? h("button", { type: "button", class: "dugme", onclick: () => cariHizliHareket(cari.id, "giris") }, "Tahsilat al") : null,
@@ -385,6 +387,304 @@ function santiyeFormAc(st = null) {
   });
 }
 
+// ---------------------------------------------------------------- depolar (şantiye içindeki taşeron hesapları)
+const depoEtiketi = (d) => (d.santiye_ad ? `${d.ad} (${d.santiye_ad})` : d.ad);
+
+/** Yeni depo açar. Aynı adlı cari varsa ona bağlanır; yoksa taşeron carisi açılsın mı diye sorulur (kalemler ona borç yazılır). */
+async function depoAc(ad, santiye_id = null) {
+  try {
+    const cariler = await api(`/api/cariler?ara=${encodeURIComponent(ad)}`);
+    let cari = cariler.find((c) => aramaAnahtari(c.unvan) === aramaAnahtari(ad));
+    if (!cari && confirm(`'${ad}' deposuna ayrılan kalemler bir carinin hesabına borç yazılsın mı?\n\n`
+      + `Tamam: '${ad}' adıyla cari açılır ve depoya bağlanır.\nİptal: cari bağlanmaz, kalemler yalnız raporda depo altında görünür.`)) {
+      cari = await api("/api/cariler", { metod: "POST", veri: { unvan: ad, tur: "tedarikci" } });
+    }
+    const d = await api("/api/depolar", { metod: "POST", veri: { ad, santiye_id, cari_id: cari?.id || null } });
+    listeyiTazele("depolar");
+    bildir(`'${d.ad}' deposu hazır${d.cari_unvan ? `; kalemleri '${d.cari_unvan}' carisine borç yazılır` : ""}.`);
+    return d;
+  } catch (e) { bildir(e.message, true); return null; }
+}
+
+/** Toplu atama için depo seçimi. deger(): null = değişmez, 0 = depoyu kaldır (şantiyenin kendisi), id = o depo. */
+function depoSecimi() {
+  const sel = h("select", { title: "Seçilen faturaların bütün kalemleri bu depoya ayrılır" },
+    h("option", { value: "" }, "— Depo —"), h("option", { value: "0" }, "Depoyu kaldır (şantiyenin kendisi)"),
+    h("option", { value: "__yeni_depo" }, "+ Yeni depo…"));
+  const ekle = (d) => sel.insertBefore(h("option", { value: d.id }, depoEtiketi(d)), sel.lastChild);
+  api("/api/depolar").then((liste) => liste.forEach(ekle)).catch(() => {});
+  sel.addEventListener("focus", () => (sel.dataset.onceki = sel.value));
+  sel.addEventListener("change", async () => {
+    if (sel.value !== "__yeni_depo") return;
+    const ad = prompt("Yeni deponun adı (ör. Taşeron Usta):")?.trim();
+    const d = ad ? await depoAc(ad) : null;
+    if (d && ![...sel.options].some((o) => o.value === String(d.id))) ekle(d);
+    sel.value = d ? String(d.id) : sel.dataset.onceki || "";
+  });
+  sel.deger = () => (sel.value === "" || sel.value.startsWith("__") ? null : Number(sel.value));
+  return sel;
+}
+
+function depoListesiAc() {
+  sekmeAc("depolar", "Depolar", listeEkrani({
+    baslik: "Depolar (taşeronlar)",
+    kaynak: () => api("/api/depolar"),
+    kolonlar: [
+      { alan: "ad", baslik: "Depo" }, { alan: "santiye_ad", baslik: "Şantiye" },
+      { alan: "cari_unvan", baslik: "Borç yazılan cari" }, { alan: "durum", baslik: "Durum", deger: (d) => (d.durum === "pasif" ? "Pasif" : "Aktif") },
+      { alan: "aciklama", baslik: "Açıklama" },
+    ],
+    ustAlan: () => h("span", { style: "color:#4a5866;font-size:12px" },
+      "Fatura kalemi bir depoya ayrılırsa şantiye raporunda o depo altında görünür; depoya cari bağlıysa kalem o cariye borç yazılır. Depo seçilmeyen kalem şantiyenin kendisine kalır."),
+    yeni: () => depoFormAc(), yeniYazi: "+ Yeni depo",
+    ac: (d) => depoFormAc(d),
+    sil: (d) => api(`/api/depolar/${d.id}`, { metod: "DELETE" }),
+  }));
+}
+
+function depoFormAc(d = null) {
+  const s = sekmeAc(d ? `depo-${d.id}` : `depo-yeni-${Date.now()}`, d ? d.ad : "Yeni Depo", {
+    async ciz(el) {
+      const { cariler, santiyeler } = await secenekleriGetir();
+      const cariS = h("select", { name: "cari_id" }, [["", "— Cari bağlanmasın —"], ...cariler.map((c) => [c.id, c.unvan])]
+        .map(([v, m]) => h("option", { value: v, selected: String(v) === String(d?.cari_id ?? "") }, m)));
+      const form = h("form", { class: "form-pencere", onsubmit: (e) => { e.preventDefault(); this.kaydet(); } },
+        h("h2", {}, "Depo Kartı"),
+        h("fieldset", {}, h("legend", {}, "Bilgiler"), h("div", { class: "alanlar" },
+          alan("Depo adı (ör. Taşeron Usta)", "ad", d?.ad, { zorunlu: true }),
+          santiyeAlani("Şantiye", d?.santiye_id, santiyeler),
+          h("label", {}, "Borç yazılacak cari (taşeron)", cariS),
+          alan("Durum", "durum", d?.durum, { secenekler: [["aktif", "Aktif"], ["pasif", "Pasif"]] }),
+          alan("Açıklama", "aciklama", d?.aciklama, { genis: true }))),
+        h("p", { style: "color:#4a5866" }, "Cari bağlanırsa bu depoya ayrılan fatura kalemleri (KDV dahil) o carinin hesabına borç yazılır. Faturanın kendi carisi (satıcı) değişmez."),
+        h("div", { class: "dugmeler" }, h("button", { class: "dugme ana" }, "Kaydet (F2)"),
+          d?.cari_id ? h("button", { type: "button", class: "dugme", onclick: () => taseronAc(d.cari_id) }, "Taşeron sayfası") : null));
+      el.append(form);
+      aramaliSec(cariS, { bosYazi: "— Cari bağlanmasın —" });
+      this.form = form;
+    },
+    async kaydet() {
+      if (!this.form.reportValidity()) return;
+      try {
+        const v = formVerisi(this.form, ["santiye_id", "cari_id"]);
+        if (d) await api(`/api/depolar/${d.id}`, { metod: "PUT", veri: v });
+        else await api("/api/depolar", { metod: "POST", veri: v });
+        bildir("Depo kaydedildi.");
+        sekmeKapat(s);
+        listeyiTazele("depolar");
+      } catch (e) { bildir(e.message, true); }
+    },
+  });
+}
+
+// ---------------------------------------------------------------- taşeron sayfası
+const TASERON_SEKMELERI = [["paralar", "Verilen paralar"], ["kalemler", "Adına harcanan fatura kalemleri"], ["elden", "Elden harcamalar"],
+  ["personel", "Personel ücret / SGK"]];
+
+const taseronDurumu = { cariId: null, sekme: "paralar", bordro: null };
+function taseronAc(cariId = null) {
+  const durumu = taseronDurumu;
+  if (cariId != null && cariId !== durumu.cariId) Object.assign(durumu, { cariId, sekme: "paralar", bordro: null });
+  sekmeAc("taseron", "Taşeron Hesabı", {
+    async ciz(el) {
+      let cariler, taseronlar, santiyeler, depolar;
+      try {
+        [cariler, taseronlar, santiyeler, depolar] = await Promise.all([api("/api/cariler"), api("/api/taseronlar"), api("/api/santiyeler"), api("/api/depolar")]);
+      } catch (e) { return bildir(e.message, true); }
+      const taseronIdleri = new Set(taseronlar.map((t) => t.id));
+      const secS = h("select", { onchange: (e) => { durumu.cariId = Number(e.target.value) || null; durumu.bordro = null; yenidenCiz(); } },
+        h("option", { value: "" }, "— Taşeron seçin —"),
+        taseronlar.length ? h("optgroup", { label: "Taşeronlar" }, taseronlar.map((t) => h("option", { value: t.id, selected: t.id === durumu.cariId }, t.unvan))) : null,
+        h("optgroup", { label: "Bütün cariler" }, cariler.filter((c) => !taseronIdleri.has(c.id))
+          .map((c) => h("option", { value: c.id, selected: c.id === durumu.cariId }, c.unvan))));
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Taşeron Hesabı"), secS));
+      aramaliSec(secS, { bosYazi: "— Taşeron seçin —" });
+      if (!durumu.cariId) {
+        return el.append(ACIKLAMA("Taşeronu seçin. Taşerona verdiğiniz paralar, depo üzerinden onun adına harcanan fatura kalemleri, "
+          + "elden harcamalar ve personeline ödenen ücret/SGK ayrı sekmelerde görünür; hepsi taşeronun cari hesabına işlenir."));
+      }
+      let v;
+      try { v = await api(`/api/taseron/${durumu.cariId}`); } catch (e) { return bildir(e.message, true); }
+      const o = v.ozet;
+      const satir = (ad, deger, sinif = "") => [h("dt", {}, ad), h("dd", { class: sinif }, para(deger))];
+      el.append(h("div", { class: "kart-satiri", style: "margin-bottom:8px" },
+        h("div", { class: "ozet-kart" }, h("h3", {}, v.cari.unvan), h("dl", {},
+          ...satir("Taşeronun faturaları (hakediş)", o.faturalari_alis),
+          ...satir("Verilen paralar", o.paralar), ...satir("Adına harcanan fatura kalemleri", o.kalemler),
+          ...satir("Elden harcamalar", o.elden), ...satir("Personel ücret / SGK", o.personel),
+          h("dt", {}, h("b", {}, o.bakiye >= 0 ? "Bakiye (taşeron bize borçlu)" : "Bakiye (biz taşerona borçluyuz)")),
+          h("dd", {}, h("b", { class: o.bakiye < 0 ? "negatif" : "" }, para(Math.abs(o.bakiye)))))),
+        h("div", {}, h("div", { class: "dugmeler", style: "flex-direction:column;align-items:flex-start" },
+          h("button", { class: "dugme ana", onclick: () => indir(`/api/excel/taseron/${v.cari.id}`, "taseron.xlsx") }, "Excel'e aktar (dört sekme)"),
+          h("button", { class: "dugme", onclick: () => cariEkstreAc(v.cari) }, "Cari ekstre"),
+          h("button", { class: "dugme", onclick: () => cariHizliHareket(v.cari.id, "cikis") }, "Ödeme yap")),
+        v.depolar.length ? h("p", { style: "color:#4a5866;font-size:12px" }, "Bağlı depolar: ", v.depolar.map(depoEtiketi).join(", "))
+          : h("p", { style: "color:#4a5866;font-size:12px" }, "Bu cariye bağlı depo yok. Fatura kalemlerini buraya yazmak için Şantiye > Depolar'dan depo açıp bu cariyi bağlayın."))));
+      const sayi = { paralar: v.paralar.length, kalemler: v.kalemler.length, elden: v.elden.length, personel: v.personel.length };
+      el.append(h("div", { class: "alt-sekmeler" }, TASERON_SEKMELERI.map(([k, ad]) =>
+        h("button", { class: `dugme${durumu.sekme === k ? " ana" : ""}`, onclick: () => { durumu.sekme = k; yenidenCiz(); } }, `${ad} (${sayi[k]})`))));
+      const sil = async (g) => {
+        if (!confirm(`${g.personel || g.aciklama || "Kayıt"} (${para(g.tutar)} TL) silinsin mi?${g.hareket_id ? " Kasadan çıkışı da geri alınır." : ""}`)) return;
+        try { await api("/api/taseron-giderleri/toplu-sil", { metod: "POST", veri: { idler: [g.id] } }); bildir("Silindi."); yenidenCiz(); }
+        catch (e) { bildir(e.message, true); }
+      };
+      const silKolonu = [(g) => h("button", { class: "dugme tehlike kucuk", title: "Sil", onclick: () => sil(g) }, "✕"), ""];
+      const santiyeSec = () => h("select", { name: "santiye_id" }, [["", "— Şantiye —"], ...santiyeler.map((x) => [x.id, x.ad])].map(([d, m]) => h("option", { value: d }, m)));
+      const bugun = new Date().toISOString().slice(0, 10);
+      if (durumu.sekme === "paralar") {
+        el.append(ACIKLAMA("Taşerona bankadan, kasadan ya da çekle verilen paralar (cariye bağlı tahsilat/ödeme hareketleri)."),
+          raporTablosu([["tarih", "Tarih", "tarih"], ["kaynak", "Nereden"], ["aciklama", "Açıklama"], ["verilen", "Verilen", "para"], ["alinan", "Alınan", "para"]],
+            v.paralar, { toplam: ["verilen", "alinan"] }));
+      } else if (durumu.sekme === "kalemler") {
+        el.append(ACIKLAMA("Faturada kalemin Depo sütununda bu taşerona bağlı depo seçilen kalemler (KDV dahil). Faturanın carisi (satıcı) değişmez. Satıra çift tıklayınca fatura açılır."),
+          raporTablosu([["tarih", "Tarih", "tarih"], ["fatura_no", "Fatura No"], ["satici", "Satıcı"], ["santiye", "Şantiye"], ["depo", "Depo"], ["kalem", "Mal Hizmet"],
+            [(x) => `${Number(x.miktar).toLocaleString("tr-TR")} ${x.birim || ""}`, "Miktar"], ["tutar", "Tutar", "para"], ["kdv", "KDV", "para"], ["toplam", "Toplam", "para"]],
+          v.kalemler, { toplam: ["tutar", "kdv", "toplam"], ac: (x) => faturaFormAc({ id: x.fatura_id }, null) }));
+      } else if (durumu.sekme === "elden") {
+        const form = h("form", { class: "liste-ust", style: "flex-wrap:wrap", onsubmit: async (e) => {
+          e.preventDefault();
+          const f = e.target.elements;
+          try {
+            await api("/api/taseron-giderleri", { metod: "POST", veri: { cari_id: v.cari.id, tur: "elden", tarih: f.tarih.value, aciklama: f.aciklama.value || null,
+              tutar: Number(f.tutar.value) || 0, santiye_id: Number(f.santiye_id.value) || null, kasadan: f.kasadan.checked } });
+            bildir("Elden harcama eklendi ve taşerona borç yazıldı."); yenidenCiz();
+          } catch (err) { bildir(err.message, true); }
+        } }, h("input", { name: "tarih", type: "date", value: bugun, required: true }), h("input", { name: "aciklama", placeholder: "Açıklama (ne için)", style: "min-width:220px" }),
+          h("input", { name: "tutar", type: "number", step: "any", placeholder: "Tutar", required: true, style: "width:110px" }), santiyeSec(),
+          h("label", { title: "İşaretlenirse Nakit Kasa'dan da çıkış yazılır" }, h("input", { type: "checkbox", name: "kasadan" }), " Kasadan ödendi"),
+          h("button", { class: "dugme ana" }, "Ekle"));
+        el.append(ACIKLAMA("Taşeron adına faturasız, elden harcanan paralar. Taşeronun hesabına borç yazılır."), form,
+          raporTablosu([["tarih", "Tarih", "tarih"], ["aciklama", "Açıklama"], ["santiye_ad", "Şantiye"], [(g) => (g.hareket_id ? "Kasadan" : ""), "Ödeme"],
+            ["tutar", "Tutar", "para"], silKolonu], v.elden, { toplam: ["tutar"] }));
+      } else {
+        // Bordro Excel'i: önizlenir, seçilen satırlar kaydedilir (aynı ay ikinci kez yüklenirse güncellenir)
+        const dosyaG = h("input", { type: "file", accept: ".xlsx", hidden: true, onchange: async (e) => {
+          const fd = new FormData(); fd.append("dosya", e.target.files[0]); e.target.value = "";
+          try {
+            const r = await api("/api/taseron-giderleri/bordro-onizle", { metod: "POST", dosya: fd });
+            durumu.bordro = { ...r, secili: new Set(r.kisiler.map((_, i) => i)) };
+            yenidenCiz();
+          } catch (err) { bildir(err.message, true); }
+        } });
+        el.append(ACIKLAMA("Taşeronun personeline ödenen ücret ve SGK. Bordro Excel'ini yükleyin (Adı Soyadı, TCKN, T.Gün, Nor.Kazanç, SSK İşçi, "
+          + "İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları); taşerona brüt ücret (+ işveren payı) borç yazılır."),
+          h("div", { class: "liste-ust" }, dosyaG, h("button", { class: "dugme ana", onclick: () => dosyaG.click() }, "Bordro Excel'i yükle")));
+        const b = durumu.bordro;
+        if (b) {
+          const donemI = h("input", { type: "month", value: b.donem || "" });
+          const oranI = h("input", { type: "number", step: "any", value: localStorage.getItem("isveren_orani") || "0", style: "width:70px" });
+          const sS = santiyeSec();
+          const tumu = h("input", { type: "checkbox", checked: b.secili.size === b.kisiler.length,
+            onchange: (e) => { b.kisiler.forEach((_, i) => (e.target.checked ? b.secili.add(i) : b.secili.delete(i))); yenidenCiz(); } });
+          const kaydet = async () => {
+            if (!donemI.value) return bildir("Bordro ayını seçin.", true);
+            const kisiler = b.kisiler.filter((_, i) => b.secili.has(i));
+            if (!kisiler.length) return bildir("Personel seçin.", true);
+            try { localStorage.setItem("isveren_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
+            try {
+              const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: v.cari.id, donem: donemI.value,
+                santiye_id: Number(sS.value) || null, isveren_orani: Number(oranI.value) || 0, kisiler } });
+              bildir(`${r.eklenen} personel eklendi${r.guncellenen ? `, ${r.guncellenen} personel güncellendi` : ""}.`);
+              durumu.bordro = null; yenidenCiz();
+            } catch (err) { bildir(err.message, true); }
+          };
+          const secilen = b.kisiler.filter((_, i) => b.secili.has(i));
+          el.append(h("fieldset", {}, h("legend", {}, `Bordro önizleme (${b.kisiler.length} personel). Taşerona ait olanları seçin`),
+            h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Ay:", donemI, "Şantiye:", sS,
+              h("label", { title: "Bordroda işveren SGK payı yoksa brüt ücretin bu yüzdesi eklenir (0 = eklenmez)" }, "İşveren payı %: ", oranI),
+              h("button", { class: "dugme ana", onclick: kaydet }, `Seçilenleri kaydet (${secilen.length})`),
+              h("button", { class: "dugme", onclick: () => { durumu.bordro = null; yenidenCiz(); } }, "Vazgeç")),
+            h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+              h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Personel", "TC", "Gün", "Brüt", "Net ödenen", "SGK işçi", "Vergi", "Taşerona yazılacak"]
+                .map((x, i) => h("th", { class: i > 2 ? "sayi" : "" }, x)))),
+              h("tbody", {}, b.kisiler.map((x, i) => h("tr", {},
+                h("td", {}, h("input", { type: "checkbox", checked: b.secili.has(i), onchange: (e) => { e.target.checked ? b.secili.add(i) : b.secili.delete(i); yenidenCiz(); } })),
+                h("td", {}, x.personel), h("td", {}, x.tckn || ""), h("td", { class: "sayi" }, x.gun ?? ""),
+                ...["brut", "net", "sgk_isci", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(x[a])))))),
+              h("tfoot", {}, h("tr", {}, h("td", { colspan: 4 }, "Seçilenlerin toplamı"),
+                ...["brut", "net", "sgk_isci", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(secilen.reduce((t, x) => t + (x[a] || 0), 0))))))))));
+        }
+        const elle = h("form", { class: "liste-ust", style: "flex-wrap:wrap", onsubmit: async (e) => {
+          e.preventDefault();
+          const f = e.target.elements, ay = f.donem.value, [y, a] = ay.split("-").map(Number);
+          try {
+            await api("/api/taseron-giderleri", { metod: "POST", veri: { cari_id: v.cari.id, tur: "personel", donem: ay,
+              tarih: `${ay}-${String(new Date(y, a, 0).getDate()).padStart(2, "0")}`, personel: f.personel.value,
+              net: Number(f.net.value) || 0, sgk_isci: Number(f.sgk.value) || 0, isveren: Number(f.isveren.value) || null, santiye_id: Number(f.santiye_id.value) || null } });
+            bildir("Personel ödemesi eklendi."); yenidenCiz();
+          } catch (err) { bildir(err.message, true); }
+        } }, "Elle ekle:", h("input", { name: "donem", type: "month", value: bugun.slice(0, 7), required: true }),
+          h("input", { name: "personel", placeholder: "Personel adı", required: true }),
+          h("input", { name: "net", type: "number", step: "any", placeholder: "Net ücret", style: "width:100px" }),
+          h("input", { name: "sgk", type: "number", step: "any", placeholder: "SGK", style: "width:90px" }),
+          h("input", { name: "isveren", type: "number", step: "any", placeholder: "İşveren payı", style: "width:100px" }), santiyeSec(),
+          h("button", { class: "dugme" }, "Ekle"));
+        el.append(elle, raporTablosu([["donem", "Ay"], ["personel", "Personel"], ["tckn", "TC"], ["gun", "Gün"], ["brut", "Brüt", "para"], ["net", "Net ödenen", "para"],
+          ["sgk_isci", "SGK işçi", "para"], ["vergi", "Vergi", "para"], ["isveren", "İşveren payı", "para"], ["tutar", "Taşerona yazılan", "para"], silKolonu],
+        v.personel, { toplam: ["brut", "net", "sgk_isci", "vergi", "isveren", "tutar"] }));
+      }
+      durum(`${v.cari.unvan}: bakiye ${para(o.bakiye)} TL`);
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => durumu.cariId && indir(`/api/excel/taseron/${durumu.cariId}`, "taseron.xlsx"),
+  });
+}
+
+function depoRaporuAc() {
+  const filtre = { santiye: "", depo: "", ay: "" };
+  const sorgu = () => {
+    const q = new URLSearchParams();
+    if (filtre.santiye) q.set("santiye_id", filtre.santiye);
+    if (filtre.depo) q.set("depo_id", filtre.depo);
+    if (filtre.ay) {
+      const [y, a] = filtre.ay.split("-").map(Number);
+      q.set("baslangic", `${filtre.ay}-01`);
+      q.set("bitis", `${filtre.ay}-${String(new Date(y, a, 0).getDate()).padStart(2, "0")}`);
+    }
+    return q.toString();
+  };
+  sekmeAc("rapor-depo", "Depo Bazlı Harcamalar", {
+    async ciz(el) {
+      let santiyeler, depolar, satirlar;
+      try { [santiyeler, depolar, satirlar] = await Promise.all([api("/api/santiyeler"), api("/api/depolar"), api(`/api/raporlar/depo-harcamalari?${sorgu()}`)]); }
+      catch (e) { return bildir(e.message, true); }
+      const sec = (liste, alanAd, bos) => h("select", { onchange: (e) => (filtre[alanAd] = e.target.value) },
+        [["", bos], ...liste].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre[alanAd] }, m)));
+      const govde = [];
+      const gruplar = new Map();
+      for (const r of satirlar) { const k = `${r.santiye} / ${r.depo}`; if (!gruplar.has(k)) gruplar.set(k, []); gruplar.get(k).push(r); }
+      const top = (d, a) => d.reduce((t, r) => t + (r[a] || 0), 0);
+      for (const [ad, dizi] of gruplar) {
+        for (const r of dizi) {
+          govde.push(h("tr", { ondblclick: r.fatura_id ? () => faturaFormAc({ id: r.fatura_id }, null) : null },
+            h("td", {}, r.santiye), h("td", {}, r.depo || ""), h("td", {}, tarih(r.tarih)), h("td", {}, r.kaynak), h("td", {}, r.fatura_no || ""),
+            h("td", {}, r.satici || ""), h("td", { style: "white-space:normal;min-width:200px" }, r.kalem),
+            h("td", { class: "sayi" }, r.miktar != null ? `${Number(r.miktar).toLocaleString("tr-TR")} ${r.birim || ""}` : ""),
+            ...["tutar", "kdv", "toplam"].map((a) => h("td", { class: "sayi" }, para(r[a])))));
+        }
+        govde.push(h("tr", { class: "ara-toplam" }, h("td", { colspan: 8 }, `${ad} toplamı`), ...["tutar", "kdv", "toplam"].map((a) => h("td", { class: "sayi" }, para(top(dizi, a))))));
+      }
+      el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, "Depo Bazlı Harcamalar"),
+          "Şantiye:", sec(santiyeler.map((x) => [x.id, x.ad]), "santiye", "— Tüm şantiyeler —"),
+          "Depo:", sec(depolar.map((d) => [d.id, depoEtiketi(d)]), "depo", "— Tüm depolar —"),
+          "Ay:", h("input", { type: "month", value: filtre.ay, onchange: (e) => (filtre.ay = e.target.value) }),
+          h("button", { class: "dugme ana", onclick: () => yenidenCiz() }, "Ara"),
+          h("button", { class: "dugme", onclick: () => { filtre.ay = ""; filtre.santiye = ""; filtre.depo = ""; yenidenCiz(); } }, "Temizle"),
+          h("button", { class: "dugme", onclick: () => this.excel() }, "Excel'e aktar (F9)")),
+        satirlar.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Şantiye", "Depo", "Tarih", "Kaynak", "Fatura No / Ay", "Satıcı", "Mal Hizmet / Açıklama", "Miktar", "Tutar (KDV hariç)", "KDV", "Toplam"]
+            .map((b, i) => h("th", { class: i >= 7 ? "sayi" : "" }, b)))),
+          h("tbody", {}, govde),
+          h("tfoot", {}, h("tr", {}, h("td", { colspan: 8 }, "Genel toplam"), ...["tutar", "kdv", "toplam"].map((a) => h("td", { class: "sayi" }, para(top(satirlar, a))))))))
+          : h("p", {}, "Bu seçime uyan depo harcaması yok. Fatura ekranında kalemin Depo sütunundan ya da faturalar listesinde toplu atamadan depo seçin."),
+        ACIKLAMA("Yalnız depoya ayrılmış kalemler listelenir; depo seçilmeyen kalemler şantiyenin kendisindedir (Şantiye Bazlı Faturalar)."));
+      durum(`${satirlar.length} kalem listelendi`);
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => indir(`/api/excel/depo-harcamalari?${sorgu()}`, `depo-harcamalari${filtre.ay ? "-" + filtre.ay : ""}.xlsx`),
+  });
+}
+
 // ---------------------------------------------------------------- faturalar
 function faturaListesiAc(yon) {
   const ad = yon === "gelen" ? "Alış Faturaları" : "Satış Faturaları";
@@ -392,6 +692,7 @@ function faturaListesiAc(yon) {
   // Toplu atama (onaylı faturalar da): şantiye (yazınca yoksa açılır) ve gider türü
   const santiyeK = santiyeSecici();
   const giderS = h("select", {}, [["", "— Gider türü seçin —"], ...BEN.gider_turleri.map((g) => [g, g])].map(([d, m]) => h("option", { value: d }, m)));
+  const depoS = depoSecimi();
   sekmeAc(`faturalar-${yon}`, ad, listeEkrani({
     baslik: ad,
     kaynak: () => api(`/api/faturalar?yon=${yon}${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
@@ -421,11 +722,11 @@ function faturaListesiAc(yon) {
     yeni: () => faturaFormAc(null, yon),
     ac: (f) => faturaFormAc(f, yon),
     silSorarak: (f) => faturalariSil([f]),
-    toplu: [{ ad: "Seçilenlere ata", ek: h("span", { style: "display:inline-flex;gap:6px" }, santiyeK, giderS), islem: async (sec) => {
-        const veri = { idler: sec.map((f) => f.id), santiye_id: Number(santiyeK.secim.value) || null, gider_turu: giderS.value || null };
-        if (!veri.santiye_id && !veri.gider_turu) { bildir("Şantiye ya da gider türü seçin.", true); return false; }
+    toplu: [{ ad: "Seçilenlere ata", ek: h("span", { style: "display:inline-flex;gap:6px" }, santiyeK, giderS, depoS), islem: async (sec) => {
+        const veri = { idler: sec.map((f) => f.id), santiye_id: Number(santiyeK.secim.value) || null, gider_turu: giderS.value || null, depo_id: depoS.deger() };
+        if (!veri.santiye_id && !veri.gider_turu && veri.depo_id == null) { bildir("Şantiye, gider türü ya da depo seçin.", true); return false; }
         const r = await api("/api/faturalar/toplu-guncelle", { metod: "POST", veri });
-        bildir(`${r.guncellenen} faturaya${veri.santiye_id ? " ve tüm kalemlerine" : ""} atandı.`);
+        bildir(`${r.guncellenen} faturaya${veri.santiye_id || veri.depo_id != null ? " ve tüm kalemlerine" : ""} atandı.`);
       } },
       { ad: "Seçilenleri sil", tehlikeli: true, islem: (sec) => faturalariSil(sec) }],
     excel: "/api/excel/faturalar",
@@ -651,6 +952,7 @@ function faturaFormAc(fatura, yon) {
     async ciz(el) {
       if (fatura) { try { fatura = await api(`/api/faturalar/${fatura.id}`); } catch (e) { return bildir(e.message, true); } }
       const { cariler, santiyeler } = await secenekleriGetir();
+      const depolar = await api("/api/depolar").catch(() => []);
       const f = fatura || { yon, kalemler: [], tevkifat: 0, stopaj: 0, para_birimi: "TRY" };
       if (!fatura && yon === "giden") {  // yeni satış faturasına sıradaki numarayı öner
         try { f.fatura_no = (await api("/api/faturalar/sonraki-no?yon=giden")).fatura_no; } catch { /* öneri yoksa boş kalır */ }
@@ -809,6 +1111,7 @@ function faturaFormAc(fatura, yon) {
       const toplamAlan = h("div", { class: "toplamlar" });
       const farkKutu = h("div", { class: "hata-kutu", hidden: true });
       const kalemSantiye = [["", "— Fatura şantiyesi —"], ...santiyeler.map((x) => [x.id, x.ad]), ["__yeni_santiye", "+ Yeni şantiye…"]];
+      const kalemDepo = [["", "— Şantiyenin kendisi —"], ...depolar.map((d) => [d.id, depoEtiketi(d)]), ["__yeni_depo", "+ Yeni depo…"]];
       // "+ Yeni şantiye…" seçilince ad sorulur, şantiye Şantiyeler'e kaydedilir ve tüm şantiye listelerine eklenip seçilir.
       // Aynı adlı şantiye varsa sunucu onu döndürür: ikinci kez eklenmez, var olan seçilir
       const santiyeAc = async (ad) => {
@@ -829,6 +1132,21 @@ function faturaFormAc(fatura, yon) {
       aramaliSec(form.elements.santiye_id, { yeniYazi: (ad) => `+ "${ad}" adıyla yeni şantiye aç`, yeniAc: santiyeAc, bosYazi: "— Şantiye yok —", yeniIpucu: "Yeni şantiye için adını yazın" });
       form.addEventListener("change", async (e) => {
         const sec = e.target;
+        if (sec.tagName === "SELECT" && sec.value === "__yeni_depo") {
+          // Yeni depo kalemin (yoksa faturanın) şantiyesine bağlanır; bütün kalemlerin depo listesine eklenir
+          const onceki = sec.dataset.onceki ?? "";
+          const ad = prompt("Yeni deponun adı (ör. Taşeron Usta):")?.trim();
+          const tr = sec.closest("tr");
+          const d = ad ? await depoAc(ad, Number($("[data-a=santiye_id]", tr)?.value) || Number(form.elements.santiye_id.value) || null) : null;
+          if (d && !kalemDepo.some(([id]) => id === d.id)) {
+            kalemDepo.splice(kalemDepo.length - 1, 0, [d.id, depoEtiketi(d)]);
+            for (const x of form.querySelectorAll("select[data-a=depo_id]")) {
+              x.insertBefore(h("option", { value: d.id }, depoEtiketi(d)), [...x.options].find((o) => o.value === "__yeni_depo"));
+            }
+          }
+          sec.value = d ? String(d.id) : onceki;
+          return;
+        }
         if (sec.tagName !== "SELECT" || sec.value !== "__yeni_santiye") return;
         const onceki = sec.dataset.onceki ?? "";
         const ad = prompt("Yeni şantiyenin adı:")?.trim();
@@ -872,6 +1190,8 @@ function faturaFormAc(fatura, yon) {
           h("td", { class: "sayi tutar" }),
           h("td", {}, h("select", { "data-a": "santiye_id", title: "Fatura birden fazla şantiyeye aitse kalemin şantiyesini seçin" },
             kalemSantiye.map(([d, m]) => h("option", { value: d, selected: String(d) === String(k.santiye_id ?? "") }, m)))),
+          h("td", {}, h("select", { "data-a": "depo_id", title: "Kalem şantiye içinde bir depoya (taşerona) aitse seçin; boşsa şantiyenin kendisine kalır" },
+            kalemDepo.map(([d, m]) => h("option", { value: d, selected: String(d) === String(k.depo_id ?? "") }, m)))),
           h("td", {}, h("button", { type: "button", class: "dugme tehlike", title: "Satırı sil", onclick: () => { tr.remove(); hesapla(); } }, "✕")));
         tr.addEventListener("input", hesapla);
         if (k.tutar != null) tr.kayitliTutar = Number(k.tutar);
@@ -888,7 +1208,7 @@ function faturaFormAc(fatura, yon) {
         const degismedi = tr.kayitliTutar != null && ILK_ALANLAR.map(d).join("|") === tr.ilkDegerler;
         return { aciklama: d("aciklama") || "-", miktar, birim: d("birim") || null, birim_fiyat, iskonto_orani, iskonto_tutari,
           tutar: degismedi ? tr.kayitliTutar : null,
-          kdv_orani: Number(d("kdv_orani")) || 0, santiye_id: Number(d("santiye_id")) || null,
+          kdv_orani: Number(d("kdv_orani")) || 0, santiye_id: Number(d("santiye_id")) || null, depo_id: Number(d("depo_id")) || null,
           tevkifat_orani: Number(tpay) || 0, tevkifat_kodu: tkod || null, stopaj_orani: Number(d("stopaj_orani")) || 0,
           kdv_tutari: $("[data-a=kdv_tutari]", tr).dataset.elle ? Number(d("kdv_tutari")) || 0 : null };
       });
@@ -961,7 +1281,7 @@ function faturaFormAc(fatura, yon) {
       form.append(h("fieldset", {}, h("legend", {}, "Kalemler"),
         h("div", { class: "tablo-kap" }, h("table", { class: "liste kalemler" },
           h("thead", {}, h("tr", {}, ["Sıra No", "Mal Hizmet Adı", "Miktar", "Birim", "Birim Fiyat", "İskonto Oranı %", "İskonto Tutarı", "KDV Oranı %", "KDV Tutarı",
-            "Tevkifat", "Stopaj %", "Mal Hizmet Tutarı", "Şantiye", ""].map((b) => h("th", {}, b)))), kalemGovde)),
+            "Tevkifat", "Stopaj %", "Mal Hizmet Tutarı", "Şantiye", "Depo", ""].map((b) => h("th", {}, b)))), kalemGovde)),
         h("div", { class: "dugmeler" }, h("button", { type: "button", class: "dugme", onclick: () => { kalemSatiri(); hesapla(); } }, "+ Satır ekle")),
         farkKutu, toplamAlan));
       form.append(h("div", { class: "dugmeler" },
@@ -1287,6 +1607,7 @@ function aiOkumaAc() {
         const santiyeK = santiyeSecici(santiyeler);
         const santiyeS = santiyeK.secim;
         const giderS = h("select", {}, [["", "— Gider türü seçin —"], ...BEN.gider_turleri.map((g) => [g, g])].map(([d, m]) => h("option", { value: d }, m)));
+        const depoS = depoSecimi();
         const seciliIdler = () => (secili.size ? [...secili] : (bildir("Önce fatura seçin.", true), null));
         const toplu = async (islem) => {
           const idler = seciliIdler();
@@ -1301,10 +1622,10 @@ function aiOkumaAc() {
               const r = await api("/api/faturalar/toplu-sil", { metod: "POST", veri: { idler } });
               bildir(`${r.silinen} fatura silindi.`);
             } else {
-              const veri = { idler, santiye_id: Number(santiyeS.value) || null, gider_turu: giderS.value || null };
-              if (!veri.santiye_id && !veri.gider_turu) return bildir("Şantiye ya da gider türü seçin.", true);
+              const veri = { idler, santiye_id: Number(santiyeS.value) || null, gider_turu: giderS.value || null, depo_id: depoS.deger() };
+              if (!veri.santiye_id && !veri.gider_turu && veri.depo_id == null) return bildir("Şantiye, gider türü ya da depo seçin.", true);
               const r = await api("/api/faturalar/toplu-guncelle", { metod: "POST", veri });
-              bildir(`${r.guncellenen} faturaya${veri.santiye_id ? " ve tüm kalemlerine" : ""} atandı.`);
+              bildir(`${r.guncellenen} faturaya${veri.santiye_id || veri.depo_id != null ? " ve tüm kalemlerine" : ""} atandı.`);
             }
             tabloyuCiz();
           } catch (e) { bildir(e.message, true); }
@@ -1366,7 +1687,7 @@ function aiOkumaAc() {
               h("button", { class: "dugme ana", onclick: () => toplu("onayla") }, "Seçilenleri onayla"),
               h("button", { class: "dugme tehlike", onclick: () => toplu("sil") }, "Seçilenleri sil"),
               h("span", { class: "arac-ayrac", style: "align-self:stretch" }),
-              santiyeK, giderS, h("button", { class: "dugme", onclick: () => toplu("ata") }, "Seçilenlere ata"),
+              santiyeK, giderS, depoS, h("button", { class: "dugme", onclick: () => toplu("ata") }, "Seçilenlere ata"),
               sayac, h("span", { class: "arac-ayrac", style: "align-self:stretch" }),
               h("button", { class: "dugme", onclick: () => indir(`/api/excel/fatura-uyarilari?yon=${yon}`, "fatura-uyari-raporu.xlsx") }, "Uyarı raporu (Excel)"),
               h("button", { class: "dugme", title: "Sorunlu faturaların ve okunamayan dosyaların belgeleri, nedenleri ve PDF dökümü tek ZIP",
@@ -1467,12 +1788,12 @@ function santiyeFaturalariAc() {
             kalemSayisi++;
             govde.push(h("tr", { title: "Çift tıklayınca fatura açılır", ondblclick: () => faturaFormAc({ id: r.fatura_id }, null) },
               h("td", {}, r.santiye), h("td", {}, tarih(r.tarih)), h("td", {}, r.fatura_no || ""), h("td", {}, r.tur), h("td", {}, r.cari || ""),
-              h("td", {}, r.gider_turu || ""), h("td", { style: "white-space:normal;min-width:220px" }, d.aciklama || ""),
+              h("td", {}, d.depo || ""), h("td", {}, r.gider_turu || ""), h("td", { style: "white-space:normal;min-width:220px" }, d.aciklama || ""),
               h("td", { class: "sayi" }, d.miktar != null ? `${Number(d.miktar).toLocaleString("tr-TR")} ${d.birim || ""}` : ""),
               h("td", { class: "sayi" }, para(d.tutar)), h("td", { class: "sayi" }, para(d.kdv)), h("td", { class: "sayi" }, para(d.toplam))));
           }
         }
-        govde.push(h("tr", { class: "ara-toplam" }, h("td", { colspan: 8 }, `${ad} toplamı (${dizi.length} fatura)`),
+        govde.push(h("tr", { class: "ara-toplam" }, h("td", { colspan: 9 }, `${ad} toplamı (${dizi.length} fatura)`),
           ...["ara_toplam", "kdv", "genel_toplam"].map((a) => h("td", { class: "sayi" }, para(top(dizi, a))))));
       }
       // Gider türüne göre özet
@@ -1491,10 +1812,10 @@ function santiyeFaturalariAc() {
         turler.size ? h("div", { class: "liste-ust", style: "flex-wrap:wrap;font-size:13px" }, "Gider türüne göre:",
           [...turler].sort((x, y) => y[1] - x[1]).map(([t, v]) => h("span", { class: "etiket" }, `${t}: ${para(v)}`))) : "",
         satirlar.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
-          h("thead", {}, h("tr", {}, ["Şantiye", "Tarih", "Fatura No", "Tür", "Cari", "Gider Türü", "Mal Hizmet Adı", "Miktar", "Tutar (KDV hariç)", "KDV", "Toplam"]
-            .map((b, i) => h("th", { class: i >= 7 ? "sayi" : "" }, b)))),
+          h("thead", {}, h("tr", {}, ["Şantiye", "Tarih", "Fatura No", "Tür", "Cari", "Depo", "Gider Türü", "Mal Hizmet Adı", "Miktar", "Tutar (KDV hariç)", "KDV", "Toplam"]
+            .map((b, i) => h("th", { class: i >= 8 ? "sayi" : "" }, b)))),
           h("tbody", {}, govde),
-          h("tfoot", {}, h("tr", {}, h("td", { colspan: 8 }, "Genel toplam"),
+          h("tfoot", {}, h("tr", {}, h("td", { colspan: 9 }, "Genel toplam"),
             ...["ara_toplam", "kdv", "genel_toplam"].map((a) => h("td", { class: "sayi" }, para(top(satirlar, a))))))))
           : h("p", {}, "Bu seçime uyan onaylı fatura yok."),
         h("p", { style: "color:#4a5866" }, "Yalnız onaylı faturalar listelenir. Bir fatura birden fazla şantiyeye aitse her şantiyeye kendi kalemleri yazılır. Satıra çift tıklayınca fatura açılır."));
@@ -1524,9 +1845,11 @@ function cariEkstreAc(cari) {
     kolonlar: [{ alan: "tarih", baslik: "Tarih", tip: "tarih" }, { alan: "belge", baslik: "Belge No" }, { alan: "aciklama", baslik: "Açıklama" },
       { alan: "borc", baslik: "Borç", tip: "para" }, { alan: "alacak", baslik: "Alacak", tip: "para" }, { alan: "bakiye", baslik: "Bakiye", tip: "para" }],
     toplamlar: ["borc", "alacak"],
-    ac: (s) => (s.fatura_id ? faturaFormAc({ id: s.fatura_id }, null) : bildir("Bu satır bir para hareketidir.")),
+    ac: (s) => (s.fatura_id || s.depo_fatura_id ? faturaFormAc({ id: s.fatura_id || s.depo_fatura_id }, null)
+      : s.hareket_id ? bildir("Bu satır bir para hareketidir.") : taseronAc(cari.id)),
     ustAlan: () => h("span", { class: "dugmeler", style: "margin:0" },
       h("button", { class: "dugme", onclick: () => yazdirAc(`/api/yazdir/cari-ekstre/${cari.id}`) }, "Ekstreyi yazdır"),
+      h("button", { class: "dugme", onclick: () => taseronAc(cari.id) }, "Taşeron sayfası"),
       h("button", { class: "dugme", onclick: () => yazdirAc(`/api/yazdir/mutabakat/${cari.id}`) }, "Mutabakat mektubu"),
       h("button", { class: "dugme", onclick: () => cariHizliHareket(cari.id, "giris") }, "Tahsilat al"),
       h("button", { class: "dugme", onclick: () => cariHizliHareket(cari.id, "cikis") }, "Ödeme yap"),
@@ -3367,8 +3690,9 @@ function verileriSifirla() {
 const MODULLER = [
   ["Fatura", [["Belgeden Fatura Oku", aiOkumaAc], ["Alış Faturaları", () => faturaListesiAc("gelen")], ["Satış Faturaları", () => faturaListesiAc("giden")]]],
   ["Günlük Takip", [["Hızlı Arama (F3)", () => hizliAramaAc()], ["Ödeme Takvimi / Nakit Akışı", odemeTakvimiAc], ["Düzenli Ödemeler", duzenliOdemelerAc]]],
-  ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Mutabakat", mutabakatAc]]],
-  ["Şantiye", [["Şantiyeler", santiyeListesiAc], ["Şantiye Bazlı Faturalar", santiyeFaturalariAc], ["Şantiye Maliyet Raporu", santiyeOzetAc]]],
+  ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Taşeron Hesabı", () => taseronAc()], ["Mutabakat", mutabakatAc]]],
+  ["Şantiye", [["Şantiyeler", santiyeListesiAc], ["Depolar (taşeronlar)", depoListesiAc], ["Şantiye Bazlı Faturalar", santiyeFaturalariAc], ["Depo Bazlı Harcamalar", depoRaporuAc],
+    ["Şantiye Maliyet Raporu", santiyeOzetAc]]],
   ["Çek / Senet", [["Alınan Çekler", () => cekListesiAc("alinan")], ["Verilen Çekler", () => cekListesiAc("verilen")], ["Toplu Çek Girişi", () => topluCekAc("alinan")], ["Vade Takvimi", vadeTakvimiAc],
     ["Çek / Senet Raporları", cekRaporuAc], ["Vadesi Gelen Çekler", () => vadeBildirimiKontrol(true, true)]]],
   ["Banka / Kasa", [["Banka Hesapları", bankaHesaplariAc], ["Nakit Kasa", kasaAc], ["Ekstre Yükle", () => ekstreYukleAc()],

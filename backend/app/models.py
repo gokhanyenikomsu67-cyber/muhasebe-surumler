@@ -2,7 +2,7 @@
 programı kullanan her kişinin verisi diğerlerinden ayrı kalır."""
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, JSON, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, JSON, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -81,6 +81,48 @@ class Santiye(Base):
     durum: Mapped[str] = mapped_column(String(20), default="aktif")  # aktif | tamamlandi
 
 
+class Depo(Base):
+    """Şantiye içindeki ayrı hesap (örn. "Taşeron Usta"). Fatura kalemi depoya ayrılırsa şantiye raporunda depo
+    kırılımıyla görünür; depoya cari bağlıysa kalem tutarı o cariye borç yazılır (faturanın kendi carisi değişmez)."""
+    __tablename__ = "depolar"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    ad: Mapped[str] = mapped_column(String(255))
+    santiye_id: Mapped[int | None] = mapped_column(ForeignKey("santiyeler.id"))
+    cari_id: Mapped[int | None] = mapped_column(ForeignKey("cariler.id"))
+    aciklama: Mapped[str | None] = mapped_column(Text)
+    durum: Mapped[str] = mapped_column(String(20), default="aktif")  # aktif | pasif
+    santiye: Mapped["Santiye | None"] = relationship()
+    cari: Mapped["Cari | None"] = relationship()
+
+
+class TaseronGider(Base):
+    """Taşeron adına yapılan faturasız harcama: elden verilen/harcanan para (tur=elden) ya da taşeronun personeline
+    ödenen ücret ve SGK (tur=personel). Tutar taşeron carisine borç yazılır."""
+    __tablename__ = "taseron_giderleri"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    cari_id: Mapped[int] = mapped_column(ForeignKey("cariler.id"), index=True)
+    tur: Mapped[str] = mapped_column(String(10))  # elden | personel
+    tarih: Mapped[date] = mapped_column(Date, index=True)
+    donem: Mapped[str | None] = mapped_column(String(7))  # personelde bordro ayı: 2026-09
+    aciklama: Mapped[str | None] = mapped_column(Text)
+    santiye_id: Mapped[int | None] = mapped_column(ForeignKey("santiyeler.id"))
+    depo_id: Mapped[int | None] = mapped_column(ForeignKey("depolar.id"))
+    personel: Mapped[str | None] = mapped_column(String(255))
+    tckn: Mapped[str | None] = mapped_column(String(11))
+    gun: Mapped[int | None] = mapped_column(Integer)
+    brut: Mapped[float | None] = mapped_column(Para)
+    net: Mapped[float | None] = mapped_column(Para)  # personele ödenen net
+    sgk_isci: Mapped[float | None] = mapped_column(Para)  # SGK + işsizlik işçi payları
+    vergi: Mapped[float | None] = mapped_column(Para)  # gelir vergisi + damga vergisi
+    isveren: Mapped[float | None] = mapped_column(Para)  # SGK + işsizlik işveren payları
+    tutar: Mapped[float] = mapped_column(Para)  # cariye borç yazılan toplam
+    # Kasadan ödendiyse kasadaki çıkış hareketi (cariye bağlı değildir; borcu bu kayıt yazar)
+    hareket_id: Mapped[int | None] = mapped_column(ForeignKey("hareketler.id"))
+    santiye: Mapped["Santiye | None"] = relationship()
+
+
 class Fatura(Base):
     __tablename__ = "faturalar"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -151,6 +193,8 @@ class FaturaKalem(Base):
     tutar: Mapped[float] = mapped_column(Para, default=0)  # KDV hariç
     # Boşsa faturanın şantiyesi geçerlidir; birden fazla şantiyeye ait faturalarda kalem bazında seçilir.
     santiye_id: Mapped[int | None] = mapped_column(ForeignKey("santiyeler.id"))
+    # Şantiye içindeki depo (taşeron); boşsa kalem şantiyenin kendisine kalır
+    depo_id: Mapped[int | None] = mapped_column(ForeignKey("depolar.id"))
     # Faturada yazan KDV tutarı oran x tutardan farklıysa (satıcının yazdığı esas): boşsa oran x tutar.
     kdv_tutari: Mapped[float | None] = mapped_column(Para, nullable=True)
     # KDV tevkifatı: oran onda kaç (2 = 2/10), KDVGUT kodu (624 yük taşımacılığı...). Tutar = KDV x oran / 10.
@@ -163,6 +207,7 @@ class FaturaKalem(Base):
     iskonto_tutari: Mapped[float] = mapped_column(Para, default=0)
     fatura: Mapped[Fatura] = relationship(back_populates="kalemler")
     santiye: Mapped[Santiye | None] = relationship()
+    depo: Mapped[Depo | None] = relationship()
 
     @property
     def kdv(self) -> float:

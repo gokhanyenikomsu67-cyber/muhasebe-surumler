@@ -97,7 +97,7 @@ def tekrarlari_birlestir(db, sirket: Sirket) -> tuple[list[str], list[str]]:
     birleşir; faturalar, kalemler, çekler ve banka hareketleri ona taşınır. VKN'leri farklı cariler ayrı firmadır."""
     from sqlalchemy import update
 
-    from .models import Cek, FaturaKalem, Hareket, Santiye
+    from .models import Cek, Depo, FaturaKalem, Hareket, Santiye, TaseronGider
     santiye, cari = [], []
     ilk: dict[str, Santiye] = {}
     for st in db.scalars(select(Santiye).where(Santiye.sirket_id == sirket.id).order_by(Santiye.id)).all():
@@ -106,7 +106,7 @@ def tekrarlari_birlestir(db, sirket: Sirket) -> tuple[list[str], list[str]]:
             ilk.setdefault(a, st)
             continue
         kalan = ilk[a]
-        for m in (Fatura, FaturaKalem, Cek, Hareket):
+        for m in (Fatura, FaturaKalem, Cek, Hareket, Depo, TaseronGider):
             db.execute(update(m).where(m.santiye_id == st.id).values(santiye_id=kalan.id))
         for alan in ("adres", "baslangic", "bitis", "butce"):
             if getattr(kalan, alan) is None:
@@ -120,7 +120,8 @@ def tekrarlari_birlestir(db, sirket: Sirket) -> tuple[list[str], list[str]]:
         if kalan is None:
             gruplar.setdefault(a, []).append(c)
             continue
-        for m, alan in ((Fatura, "cari_id"), (Cek, "cari_id"), (Cek, "ciro_cari_id"), (Hareket, "cari_id")):
+        for m, alan in ((Fatura, "cari_id"), (Cek, "cari_id"), (Cek, "ciro_cari_id"), (Hareket, "cari_id"),
+                        (Depo, "cari_id"), (TaseronGider, "cari_id")):
             db.execute(update(m).where(getattr(m, alan) == c.id).values({alan: kalan.id}))
         for alan in ("vkn", "vergi_dairesi", "adres", "telefon", "eposta", "iban"):
             if not getattr(kalan, alan):
@@ -267,7 +268,7 @@ def onar(db, sirket: Sirket, eski_surum: int = 0) -> dict:
             continue
         kalemleri_yaz(f, [schemas.KalemGiris(
             aciklama=kl.aciklama, miktar=float(kl.miktar), birim=kl.birim, birim_fiyat=float(kl.birim_fiyat),
-            kdv_orani=float(kl.kdv_orani), tutar=float(kl.tutar), santiye_id=kl.santiye_id, tevkifat_orani=float(kl.tevkifat_orani or 0),
+            kdv_orani=float(kl.kdv_orani), tutar=float(kl.tutar), santiye_id=kl.santiye_id, depo_id=kl.depo_id, tevkifat_orani=float(kl.tevkifat_orani or 0),
             tevkifat_kodu=kl.tevkifat_kodu, stopaj_orani=float(kl.stopaj_orani or 0), kdv_tutari=x.get("kdv_tutari"), iskonto_orani=float(kl.iskonto_orani or 0),
             iskonto_tutari=float(kl.iskonto_tutari or 0)) for kl, x in zip(f.kalemler, satirlar)])
         kdv_fatura.append(f.fatura_no or str(f.id))

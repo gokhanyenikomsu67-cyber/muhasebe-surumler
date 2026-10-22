@@ -89,16 +89,19 @@ def bagli_kayitlar(db: Session, cari_id: int | None = None, santiye_id: int | No
     Bağlı kaydı olan silinmez: silinirse faturalar ve hareketler sahipsiz kalır, bakiyeler bozulur."""
     from sqlalchemy import distinct, func, or_
 
-    from ..models import Cek, Hareket
+    from ..models import Cek, Depo, Hareket, TaseronGider
     if cari_id is not None:
         sayilar = [(db.scalar(select(func.count()).where(Fatura.cari_id == cari_id)), "faturası"),
                    (db.scalar(select(func.count()).where(or_(Cek.cari_id == cari_id, Cek.ciro_cari_id == cari_id))), "çeki"),
-                   (db.scalar(select(func.count()).where(Hareket.cari_id == cari_id)), "banka/kasa hareketi")]
+                   (db.scalar(select(func.count()).where(Hareket.cari_id == cari_id)), "banka/kasa hareketi"),
+                   (db.scalar(select(func.count()).where(Depo.cari_id == cari_id)), "bağlı deposu"),
+                   (db.scalar(select(func.count()).where(TaseronGider.cari_id == cari_id)), "taşeron gideri")]
     else:
         faturalar = db.scalar(select(func.count(distinct(Fatura.id))).select_from(Fatura).outerjoin(FaturaKalem)
                               .where(or_(Fatura.santiye_id == santiye_id, FaturaKalem.santiye_id == santiye_id)))
         sayilar = [(faturalar, "faturası"), (db.scalar(select(func.count()).where(Cek.santiye_id == santiye_id)), "çeki"),
-                   (db.scalar(select(func.count()).where(Hareket.santiye_id == santiye_id)), "banka/kasa hareketi")]
+                   (db.scalar(select(func.count()).where(Hareket.santiye_id == santiye_id)), "banka/kasa hareketi"),
+                   (db.scalar(select(func.count()).where(Depo.santiye_id == santiye_id)), "deposu")]
     return ", ".join(f"{n} {ad}" for n, ad in sayilar if n) or None
 
 

@@ -491,8 +491,8 @@ def test_kalem_bazinda_santiye():
     ws = load_workbook(io.BytesIO(r.content)).active
     satirlar = [[c.value for c in s] for s in ws.iter_rows(min_row=2)]
     assert [s[0] for s in satirlar] == ["A Şantiyesi", "A Şantiyesi TOPLAMI", "B Şantiyesi", "B Şantiyesi TOPLAMI", "GENEL TOPLAMI"]
-    assert [s[6] for s in satirlar] == ["Beton A", None, "Beton B", None, None]  # kalem kalem harcama
-    assert satirlar[-1][9:12] == [4000, 800, 4800]
+    assert [s[7] for s in satirlar] == ["Beton A", None, "Beton B", None, None]  # kalem kalem harcama
+    assert satirlar[-1][10:13] == [4000, 800, 4800]
 
 
 def test_turkce_harfli_kod_ve_vd_bicimi():

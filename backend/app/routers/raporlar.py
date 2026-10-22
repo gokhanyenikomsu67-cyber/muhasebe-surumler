@@ -48,6 +48,7 @@ def santiye_paylari(f: Fatura) -> dict[int | None, dict]:
         p["kalemler"].append(kl.aciklama)
         # Harcama dökümü için kalemin kendisi (TL karşılığıyla)
         p["detay"].append({"aciklama": kl.aciklama, "miktar": float(kl.miktar or 0), "birim": kl.birim,
+                           "depo": kl.depo.ad if kl.depo else None,
                            "tutar": round(tutar * kur, 2), "kdv": round(kdv * kur, 2), "toplam": round((tutar + kdv + ek * oran) * kur, 2)})
     return {s: {**p, "ara": round(p["ara"] * kur, 2), "kdv": round(p["kdv"] * kur, 2), "genel": round(p["genel"] * kur, 2)}
             for s, p in paylar.items()}
@@ -315,14 +316,14 @@ def excel_santiye_faturalari(yon: str | None = None, baslangic: date | None = No
     """Seçilen şantiyelerin (ve ayın) bütün harcamaları kalem kalem, şantiye şantiye gruplu ve ara toplamlı."""
     veri = santiye_fatura_veri(db, k, yon, baslangic, bitis, santiye_ids)
     # Her satır bir kalem (bütün harcamalar); kalemsiz faturada fatura tek satır
-    basliklar = ["Şantiye", "Tarih", "Fatura No", "Tür", "Cari", "Gider Türü", "Mal Hizmet Adı", "Miktar", "Birim",
+    basliklar = ["Şantiye", "Depo", "Tarih", "Fatura No", "Tür", "Cari", "Gider Türü", "Mal Hizmet Adı", "Miktar", "Birim",
                  "Tutar (KDV hariç)", "KDV", "Toplam"]
     satirlar, kalin = [], set()
     toplam = [0.0, 0.0, 0.0]
 
     def ara_toplam(ad, t):
         kalin.add(len(satirlar))
-        satirlar.append([f"{ad} TOPLAMI", None, None, None, None, None, None, None, None, round(t[0], 2), round(t[1], 2), round(t[2], 2)])
+        satirlar.append([f"{ad} TOPLAMI", None, None, None, None, None, None, None, None, None, round(t[0], 2), round(t[1], 2), round(t[2], 2)])
 
     grup, t = None, [0.0, 0.0, 0.0]
     for r in veri:
@@ -333,7 +334,7 @@ def excel_santiye_faturalari(yon: str | None = None, baslangic: date | None = No
         kalemler = r["kalem_detay"] or [{"aciklama": r["kalemler"] or None, "miktar": None, "birim": None,
                                          "tutar": r["ara_toplam"], "kdv": r["kdv"], "toplam": r["genel_toplam"]}]
         for d in kalemler:
-            satirlar.append([r["santiye"], r["tarih"], r["fatura_no"], r["tur"], r["cari"], r["gider_turu"], d["aciklama"],
+            satirlar.append([r["santiye"], d.get("depo"), r["tarih"], r["fatura_no"], r["tur"], r["cari"], r["gider_turu"], d["aciklama"],
                              d["miktar"], d["birim"], d["tutar"], d["kdv"], d["toplam"]])
         for i, a in enumerate(("ara_toplam", "kdv", "genel_toplam")):
             t[i] += r[a]
@@ -348,7 +349,7 @@ def excel_santiye_faturalari(yon: str | None = None, baslangic: date | None = No
 @router.get("/excel/fatura-kalemleri")
 def excel_fatura_kalemleri(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
     """Wolvox'a aktarım için satır bazında onaylı faturalar (geçici sütun düzeni)."""
-    basliklar = ["Fatura Tarihi", "Fatura No", "Fatura Türü", "Cari Ünvan", "Cari VKN", "Şantiye (Proje)",
+    basliklar = ["Fatura Tarihi", "Fatura No", "Fatura Türü", "Cari Ünvan", "Cari VKN", "Şantiye (Proje)", "Depo",
                  "Sıra No", "Mal Hizmet Adı", "Miktar", "Birim", "Birim Fiyat", "İskonto Oranı", "İskonto Tutarı",
                  "KDV Oranı", "KDV Tutarı", "Mal Hizmet Tutarı",
                  "Tevkifat Oranı", "Tevkifat Kodu", "Tevkifat Tutarı", "Stopaj Oranı", "Stopaj Tutarı"]
@@ -357,7 +358,8 @@ def excel_fatura_kalemleri(db: Session = Depends(get_db), k: Kullanici = Depends
         for sira, kl in enumerate(f.kalemler, 1):
             satirlar.append([f.tarih, f.fatura_no, "Alış" if f.yon == "gelen" else "Satış",
                              f.cari.unvan if f.cari else None, f.cari.vkn if f.cari else None,
-                             (kl.santiye or f.santiye).ad if (kl.santiye or f.santiye) else None, sira, kl.aciklama, float(kl.miktar),
+                             (kl.santiye or f.santiye).ad if (kl.santiye or f.santiye) else None, kl.depo.ad if kl.depo else None,
+                             sira, kl.aciklama, float(kl.miktar),
                              kl.birim, float(kl.birim_fiyat), float(kl.iskonto_orani or 0), float(kl.iskonto_tutari or 0),
                              float(kl.kdv_orani), round(kl.kdv, 2), float(kl.tutar),
                              f"{float(kl.tevkifat_orani):g}/10" if float(kl.tevkifat_orani or 0) else None, kl.tevkifat_kodu,

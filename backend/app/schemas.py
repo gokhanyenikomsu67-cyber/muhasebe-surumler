@@ -66,6 +66,18 @@ class SantiyeCikis(SantiyeGiris, Orm):
     id: int
 
 
+class DepoGiris(BaseModel):
+    ad: str
+    santiye_id: int | None = None
+    cari_id: int | None = None  # bağlıysa depoya ayrılan kalemler bu cariye borç yazılır
+    aciklama: str | None = None
+    durum: str = "aktif"
+
+
+class DepoCikis(DepoGiris, Orm):
+    id: int
+
+
 class KalemGiris(BaseModel):
     aciklama: str
     miktar: float = 1
@@ -74,6 +86,7 @@ class KalemGiris(BaseModel):
     kdv_orani: float = 20
     tutar: float | None = None
     santiye_id: int | None = None
+    depo_id: int | None = None  # şantiye içindeki depo (taşeron); boşsa şantiyenin kendisi
     tevkifat_orani: float = 0  # onda kaç: 2 = 2/10
     tevkifat_kodu: str | None = None
     stopaj_orani: float = 0  # gelir/kurumlar vergisi stopajı yüzdesi (5 = %5)

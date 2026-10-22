@@ -7,12 +7,12 @@ from sqlalchemy.orm import Session
 from .. import gecmis
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
-from ..models import BankaHesabi, Cari, Degisiklik, Fatura, Hareket, Kullanici, Santiye
+from ..models import BankaHesabi, Cari, Degisiklik, Fatura, Hareket, Depo, Kullanici, Santiye
 from .temel import sirket_kaydi
 
 router = APIRouter(prefix="/api")
 
-_AD_ALANLARI = {"cari_id": Cari, "ciro_cari_id": Cari, "banka_hesap_id": BankaHesabi, "santiye_id": Santiye}
+_AD_ALANLARI = {"cari_id": Cari, "ciro_cari_id": Cari, "banka_hesap_id": BankaHesabi, "santiye_id": Santiye, "depo_id": Depo}
 _DURUMLAR = {"taslak": "Taslak", "onayli": "Onaylı", "iptal": "İptal"}
 
 

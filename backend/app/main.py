@@ -14,7 +14,7 @@ from .auth import aktif_kullanici, yazabilir
 from . import gecmis as degisiklik_gecmisi
 from .db import Base, SessionLocal, db_guncelle, engine
 from .models import Kullanici
-from .routers import aktarim, banka, cekler, faturalar, gecmis, kartlar, kolaylik, mali, mutabakat, raporlar, reddedilen, temel, yazdir
+from .routers import aktarim, banka, cekler, faturalar, gecmis, kartlar, kolaylik, mali, mutabakat, raporlar, reddedilen, taseron, temel, yazdir
 
 Base.metadata.create_all(engine)
 degisiklik_gecmisi.kur(SessionLocal)
@@ -34,6 +34,7 @@ app.include_router(kolaylik.router)
 app.include_router(gecmis.router)
 app.include_router(mutabakat.router)
 app.include_router(reddedilen.router)
+app.include_router(taseron.router)
 
 WEB = Path(__file__).resolve().parents[2] / "web"
 app.mount("/web", StaticFiles(directory=WEB), name="web")
@@ -119,8 +120,8 @@ def verileri_sifirla(istek: Sifirlama, k: Kullanici = Depends(yazabilir)):
     """Deneme verilerini siler: faturalar, ekstre/banka/kasa hareketleri, çekler, cariler, şantiyeler, banka hesapları,
     düzenli ödemeler. Firma bilgileri ve kullanıcılar kalır. Önce yedek alınır (Yedekler > "Bu yedeğe dön" ile geri gelir)."""
     from sqlalchemy import delete, select, update
-    from .models import (BankaHesabi, Cari, Cek, Degisiklik, DuzenliOdeme, Fatura, FaturaKalem, Hareket, IsyeriEslesme,
-                         RedFatura, Santiye)
+    from .models import (BankaHesabi, Cari, Cek, Degisiklik, Depo, DuzenliOdeme, Fatura, FaturaKalem, Hareket, IsyeriEslesme,
+                         RedFatura, Santiye, TaseronGider)
     from .routers.faturalar import KAYIT_KILIDI
     if k.rol != "sahip":
         raise HTTPException(403, "Verileri sadece sahip sıfırlayabilir.")
@@ -140,7 +141,8 @@ def verileri_sifirla(istek: Sifirlama, k: Kullanici = Depends(yazabilir)):
                        "cari": db.query(Cari).filter(Cari.sirket_id == sid).count()}
             db.execute(update(Hareket).where(Hareket.sirket_id == sid).values(bagli_hareket_id=None))
             db.execute(delete(FaturaKalem).where(FaturaKalem.fatura_id.in_(select(Fatura.id).where(Fatura.sirket_id == sid))))
-            for model in (Degisiklik, DuzenliOdeme, Hareket, Cek, Fatura, RedFatura, IsyeriEslesme, BankaHesabi, Santiye, Cari):
+            for model in (Degisiklik, DuzenliOdeme, TaseronGider, Hareket, Cek, Fatura, RedFatura, IsyeriEslesme, BankaHesabi, Depo,
+                          Santiye, Cari):
                 db.execute(delete(model).where(model.sirket_id == sid))
             db.commit()
             # Hiçbir kayda bağlı kalmayan belgeler (fatura/çek dosyaları) de silinir; yedekte duruyorlar
