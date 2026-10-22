@@ -13,7 +13,7 @@ from .. import ai, kart, kural, schemas
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
 from ..hesap import banka_bakiyeleri, kasa_bakiyesi, kasa_sorgusu
-from ..models import GIDER_TURLERI, HAREKET_TURLERI, BankaHesabi, Cari, Hareket, Kullanici, Santiye, Sirket
+from ..models import GIDER_TURLERI, HAREKET_TURLERI, BankaHesabi, Cari, Hareket, IsyeriEslesme, Kullanici, Santiye, Sirket
 from ..yukleme import dosyayi_oku
 from . import cekler, kartlar
 from .faturalar import KAYIT_KILIDI
@@ -200,7 +200,13 @@ def esle(db: Session, h: Hareket) -> None:
         func.abs(Hareket.tutar - float(h.tutar)) < 0.005, Hareket.tur.in_(ESLENEN_TURLER),
         Hareket.bagli_hareket_id.is_(None), Hareket.cek_id.is_(None),
         Hareket.banka_hesap_id == hedef if hedef else Hareket.banka_hesap_id.is_(None))
-    for aday in sorted(db.scalars(q), key=lambda a: abs((a.tarih - h.tarih).days)):
+    adaylar = []
+    for a in db.scalars(q):
+        a_karsi = (a.ai_okuma or {}).get("karsi_hesap_id")
+        if a_karsi and a_karsi != h.banka_hesap_id:
+            continue  # aday başka bir hesaba giden/gelen transferdir
+        adaylar.append(a)
+    for aday in sorted(adaylar, key=lambda a: ((a.ai_okuma or {}).get("karsi_hesap_id") != h.banka_hesap_id, abs((a.tarih - h.tarih).days))):
         if not db.scalar(select(Hareket.id).where(Hareket.bagli_hareket_id == aday.id).limit(1)):
             aday.bagli_hareket_id = h.id
             return
@@ -304,6 +310,7 @@ def hareket_guncelle(hareket_id: int, veri: schemas.HareketGiris, db: Session = 
     _kontrol(db, veri, k)
     for alan, deger in veri.model_dump().items():
         setattr(h, alan, deger)
+    _elle_degisti(h)
     esle(db, h)
     kartlar.isyeri_ogren(db, h)
     db.commit()
@@ -400,9 +407,24 @@ def hareket_toplu_guncelle(istek: TopluHareket, db: Session = Depends(get_db), k
             kartlar.isyeri_ogren(db, h)
         if istek.tur:
             h.tur = istek.tur
+        _elle_degisti(h)
         n += 1
     db.commit()
     return {"guncellenen": n}
+
+
+def _taslagi_kaldir(db: Session, h: Hareket) -> None:
+    """Onaylanmamış ekstre satırını yeniden okunmak üzere siler (ona bağlı satır varsa bağı çözülür)."""
+    for b in db.scalars(select(Hareket).where(Hareket.bagli_hareket_id == h.id)):
+        b.bagli_hareket_id = None
+    db.delete(h)
+    db.flush()
+
+
+def _elle_degisti(h: Hareket) -> None:
+    """Kullanıcının düzelttiği ekstre satırı, ekstre yeniden yüklenince yeni okumayla değiştirilmez."""
+    if h.kaynak == "ekstre" and h.durum == "taslak":
+        h.ai_okuma = {**(h.ai_okuma or {}), "elle": True}
 
 
 @router.post("/hareketler/onayla")
@@ -576,8 +598,66 @@ def ekstre_otomatik(dosya: UploadFile = File(...), yontem: str = "otomatik", hes
         return sonuc
 
 
+def _numaradan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: str) -> BankaHesabi | None:
+    """Virman açıklamasında geçen hesap numarası ("1234/0567890", "1000-10102222") kendi hesaplarımızdan hangisinin
+    IBAN'ının sonuyla aynı? (Ekstrenin kendi hesabı sayılmaz.)"""
+    numaralar = kural.hesap_numaralari(aciklama)
+    for b in hesaplar:
+        rakam = re.sub(r"\D", "", b.iban or "")
+        if b.id != hesap.id and "*" not in (b.iban or "") and rakam and any(rakam.endswith(n) for n in numaralar):
+            return b
+    return None
+
+
+def _banka_kodundan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: str) -> BankaHesabi | None:
+    """"FİRMAMIZ ...*0010*..." gibi satırda karşı bankanın kodu yazar; o bankada tek hesabımız varsa para oradan gelmiştir."""
+    m = re.search(r"\*0*(\d{2,4})\*", aciklama)
+    banka = kural.BANKA_KODLARI.get(m.group(1).zfill(5)) if m else None
+    adaylar = [b for b in hesaplar if banka and b.id != hesap.id and b.tur != kartlar.KART and kural.iban_banka(b.iban) == banka]
+    return adaylar[0] if len(adaylar) == 1 else None
+
+
+def _virmanlari_esle(db: Session, hesap: BankaHesabi, virmanlar: list[Hareket]) -> int:
+    """Virmanın öbür ucu, kendi başka bir hesabımızdaki aynı tutarlı ters yönlü virmandır (aynı gün ya da 2 gün içinde).
+    Karşı hesabı bilinmeyen satır bu yolla bulunur; bilinen satırda da karşı taraftaki satıra bu hesap yazılır.
+    İki taraf birbirine bağlanır, para iki kez sayılmaz."""
+    sayi = 0
+    db.flush()
+    kullanilan: set[int] = set()
+    for h in virmanlar:
+        karsi_yon = "giris" if h.yon == "cikis" else "cikis"
+        bilinen = (h.ai_okuma or {}).get("karsi_hesap_id")
+        adaylar = [a for a in db.scalars(select(Hareket).where(
+            Hareket.sirket_id == h.sirket_id, Hareket.banka_hesap_id.is_not(None), Hareket.banka_hesap_id != hesap.id,
+            Hareket.banka_hesap_id == bilinen if bilinen else True,
+            Hareket.tur == "virman", Hareket.yon == karsi_yon, func.abs(Hareket.tutar - float(h.tutar)) < 0.005,
+            Hareket.tarih.between(h.tarih - timedelta(days=2), h.tarih + timedelta(days=2)), Hareket.cek_id.is_(None),
+            Hareket.bagli_hareket_id.is_(None), Hareket.durum != "iptal"))
+            if a.id not in kullanilan and (a.ai_okuma or {}).get("karsi_hesap_id") in (None, hesap.id)
+            and not db.scalar(select(Hareket.id).where(Hareket.bagli_hareket_id == a.id).limit(1))]
+        if not adaylar:
+            continue
+        a = min(adaylar, key=lambda x: (abs((x.tarih - h.tarih).days), x.id))
+        kullanilan.add(a.id)
+        if not bilinen:
+            h.ai_okuma = {**(h.ai_okuma or {}), "karsi_hesap_id": a.banka_hesap_id}
+        if (a.ai_okuma or {}).get("karsi_hesap_id") != hesap.id:
+            a.ai_okuma = {**(a.ai_okuma or {}), "karsi_hesap_id": hesap.id}
+            if a.durum == "onayli":
+                esle(db, a)  # onaylı karşı satır bu satırı karşılığı olarak bağlar
+        sayi += not bilinen
+    return sayi
+
+
 def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) -> dict:
     cariler = db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)).all()
+    # Kendi banka hesabımızın IBAN'ı bir cariye yazılmışsa (eski okumada açıklamadaki son IBAN alınıyordu) silinir;
+    # yoksa kendi hesaplarımız arası transfer o cariye ödeme sanılır.
+    kendi_ibanlar = {re.sub(r"\s", "", b.iban).upper() for b in db.scalars(select(BankaHesabi).where(
+        BankaHesabi.sirket_id == k.sirket_id, BankaHesabi.iban.is_not(None))) if "*" not in b.iban}
+    for c in cariler:
+        if c.iban and re.sub(r"\s", "", c.iban).upper() in kendi_ibanlar:
+            c.iban = None
     cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban} for c in cariler]
     notlar = [okunan.get("notlar") or ""]
     hesaplar = list(db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id)))
@@ -631,8 +711,17 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
         anahtar = kural.unvan_cekirdegi(oneri["unvan"]) or kural.ad_anahtari(oneri["unvan"])
         ayni = next((c["id"] for c in cari_listesi
                      if anahtar and (kural.unvan_cekirdegi(c["unvan"]) or kural.ad_anahtari(c["unvan"])) == anahtar), None)
-        return ayni or kural.cari_eslestir(oneri["unvan"], cari_listesi) or cari_ac(
-            oneri["unvan"], "musteri" if yon == "giris" else "tedarikci", oneri.get("iban"))
+        iban = oneri.get("iban") if oneri.get("iban") and oneri["iban"].upper() not in kendi_ibanlar else None
+        bulunan = ayni or kural.cari_eslestir(f"{oneri['unvan']} {iban or ''}", cari_listesi)
+        if not bulunan:
+            return cari_ac(oneri["unvan"], "musteri" if yon == "giris" else "tedarikci", iban)
+        if iban:  # carinin IBAN'ı öğrenilir: ad farklı yazılsa da (ör. harf hatası) sonraki satırlar IBAN'dan bulunur
+            c = next(x for x in cari_listesi if x["id"] == bulunan)
+            if not c.get("iban"):
+                c["iban"] = iban
+                if (kayit := db.get(Cari, bulunan)) is not None and not kayit.iban:
+                    kayit.iban = iban
+        return bulunan
 
     muhtelif_id = None
 
@@ -649,6 +738,19 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
                                                                   Hareket.ekstre_anahtari.is_not(None))))
     ilk_ekstre = not mevcut  # hesapta ekstreden gelmiş satır yok
     kart_listesi = kartlar.kartlar(db, k.sirket_id)
+    # Aynı ekstre yeniden yüklenince onaylanmamış (ve elle düzeltilmemiş) satırlar yeni okumayla değişir:
+    # okuma kuralları iyileşince kullanıcı satırları silip yeniden yüklemek zorunda kalmaz. Eşleştirme tarih, tutar ve
+    # yönle yapılır (eski okumadaki açıklama/bakiye farklı olabilir); bakiyesi de aynı olan önce alınır.
+    eski_taslak: dict[tuple, list[Hareket]] = {}
+    for h in db.scalars(select(Hareket).where(Hareket.sirket_id == k.sirket_id, Hareket.banka_hesap_id == hesap.id,
+                                              Hareket.durum == "taslak", Hareket.kaynak == "ekstre", Hareket.cek_id.is_(None),
+                                              Hareket.ekstre_anahtari.is_not(None)).order_by(Hareket.id)):
+        eski_taslak.setdefault((h.tarih.isoformat(), round(float(h.tutar), 2), h.yon), []).append(h)
+    yenilenen = 0
+    # Kullanıcının daha önce bu kalıptaki satırlar için seçtiği cari (kart işyerleriyle aynı tabloda)
+    ogrenilen = {e.anahtar: e.cari_id for e in db.scalars(select(IsyeriEslesme).where(
+        IsyeriEslesme.sirket_id == k.sirket_id, IsyeriEslesme.anahtar.like("ekstre:%")))}
+    yeni_virmanlar: list[Hareket] = []
     satirlar = eskiden_yeniye(okunan.get("satirlar", []))
     eklenen = atlanan = eslesen = cek_eslesen = elle_eslesen = 0
     atlananlar: list[str] = []
@@ -664,13 +766,35 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
             islenemeyen.append(f"{tarih:%d.%m.%Y} tutarı okunamadı: {s.get('aciklama', '')}")
             continue
         anahtar = ekstre_anahtari(hesap.id, s["tarih"], tutar, s.get("aciklama", ""), s.get("bakiye"))
-        if anahtar in mevcut:
+        yon = "giris" if tutar > 0 else "cikis"
+        ayni = eski_taslak.get((s["tarih"], round(abs(tutar), 2), yon)) or []
+        eski = next((e for e in ayni if s.get("bakiye") is not None and (e.ai_okuma or {}).get("bakiye") is not None
+                     and abs(float(e.ai_okuma["bakiye"]) - float(s["bakiye"])) < 0.005), ayni[0] if ayni else None)
+        if eski is not None:
+            ayni.remove(eski)
+        if eski is not None and not (eski.ai_okuma or {}).get("elle"):
+            mevcut.discard(eski.ekstre_anahtari)
+            _taslagi_kaldir(db, eski)
+            yenilenen += 1
+        elif anahtar in mevcut or eski is not None:
             atlanan += 1
-            atlananlar.append(anahtar)
+            atlananlar.append(eski.ekstre_anahtari if eski is not None else anahtar)
             continue
         mevcut.add(anahtar)
-        yon = "giris" if tutar > 0 else "cikis"
-        kart_hedef = kartlar.odeme_karti(kart_listesi, s.get("aciklama", "")) if yon == "cikis" else None
+        kart_hedef = kartlar.odeme_karti(kart_listesi, s.get("aciklama", ""), hesap.banka) if yon == "cikis" else None
+        if (yon == "cikis" and not kart_hedef and kart.kart_odemesi_mi(s.get("aciklama"))
+                and (s.get("onerilen_tur") or "diger") in kartlar._ODEME_OLABILIR):
+            # Kart borcu ödemesi, kart henüz tanımlı değil: kart hesabı (numaranın son 4'üyle) açılır, ödeme ona virman olur
+            son4 = kart.kart_son4(s.get("aciklama"))
+            kart_hedef = None if son4 else next((b for b in kart_listesi if b.banka == hesap.banka and not b.kart_no), None)
+            if kart_hedef is None:
+                kart_hedef = BankaHesabi(sirket_id=k.sirket_id, tur=kartlar.KART, banka=hesap.banka,
+                                         ad=f"{hesap.banka or 'Kredi'} Kart{' ' + son4 if son4 else ''}",
+                                         kart_no=f"**** **** **** {son4}" if son4 else None)
+                db.add(kart_hedef)
+                db.flush()
+                kart_listesi.append(kart_hedef)
+                yeni_hesap.append(kart_hedef.ad)
         # Karşı hesabın ekstresinden daha önce yazılmış aynı transfer varsa onu bu satırla eşleştir.
         gun = kartlar.GUN if kart_hedef else 0
         karsilik = db.scalars(select(Hareket).where(
@@ -704,6 +828,11 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
         if _YON.get(tur, yon) != yon:  # yön ile tür çelişiyorsa yöne uy
             tur = "tahsilat" if yon == "giris" else "odeme"
         cari_id = s.get("onerilen_cari_id") if s.get("onerilen_cari_id") in cari_idleri else None
+        kalip = kural.ekstre_kalibi(s.get("aciklama") or "", tutar)
+        if ogrenilen.get(kalip) in cari_idleri and tur not in ("virman", "nakit_cekim", "nakit_yatirma", "cek_tahsil", "cek_odeme"):
+            cari_id = ogrenilen[kalip]  # kullanıcı bu kalıp için daha önce bu cariyi seçmişti
+            if tur in ("diger", "masraf") and cari_id != muhtelif_id:
+                tur = "tahsilat" if yon == "giris" else "odeme"
         if kart_hedef and tur in kartlar._ODEME_OLABILIR:
             tur, cari_id = "virman", None  # kredi kartı borcu ödemesi: bankadan karta virman
         if not cari_id and s.get("onerilen_cari") and tur in ("tahsilat", "odeme"):
@@ -711,27 +840,57 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
         # Banka kesintileri, kredi ödemeleri ve ne olduğu anlaşılamayan banka satırları (kullanıcı kararı)
         if tur in ("banka_masrafi", "kredi_odeme") or (tur == "diger" and not cari_id):
             cari_id = muhtelif_cari()
-        ek = {"bakiye": s.get("bakiye")}
+        ek = {"bakiye": s.get("bakiye"), "isyeri_anahtari": kalip}
         kh = s.get("karsi_hesap")
         if tur == "virman" and kart_hedef:
             ek["karsi_hesap_id"] = kart_hedef.id
         elif tur == "virman" and kh and not kural.iban_uyar(kh["iban"], hesap.iban):
             ek["karsi_hesap_id"] = hesap_bul_ya_ac(kh["iban"], kh.get("banka") or (hesap.banka if kh.get("ayni_banka") else None)).id
+        elif tur == "virman" and (hedef := _numaradan_hesap(hesaplar, hesap, s.get("aciklama") or "")):
+            ek["karsi_hesap_id"] = hedef.id
+        elif tur == "virman" and (vno := kural.vadeli_hesap_no(s.get("aciklama") or "")):
+            # Vadeli hesap açılışı/kapanışı: vadeli hesap ayrı hesap olarak açılır, para oraya gidip geri gelir
+            hedef = next((b for b in hesaplar if b.ad.endswith(vno)), None)
+            if hedef is None:
+                hedef = BankaHesabi(sirket_id=k.sirket_id, ad=f"{hesap.banka or 'Banka'} Vadeli {vno}", banka=hesap.banka)
+                db.add(hedef)
+                db.flush()
+                hesaplar.append(hedef)
+                yeni_hesap.append(hedef.ad)
+            ek["karsi_hesap_id"] = hedef.id
         gider = s.get("onerilen_gider_turu") if s.get("onerilen_gider_turu") in GIDER_TURLERI else None
-        db.add(Hareket(sirket_id=k.sirket_id, durum="taslak", tarih=tarih, yon=yon, tur=tur, tutar=abs(tutar),
+        yeni = Hareket(sirket_id=k.sirket_id, durum="taslak", tarih=tarih, yon=yon, tur=tur, tutar=abs(tutar),
                        cari_id=cari_id, banka_hesap_id=hesap.id, gider_turu=gider, aciklama=s.get("aciklama"),
-                       kaynak="ekstre", ekstre_anahtari=anahtar, ai_okuma=ek))
+                       kaynak="ekstre", ekstre_anahtari=anahtar, ai_okuma=ek)
+        db.add(yeni)
+        if tur == "virman" and "karsi_hesap_id" not in ek and (hedef := _banka_kodundan_hesap(hesaplar, hesap, s.get("aciklama") or "")):
+            ek["karsi_hesap_id"] = hedef.id
+        if tur == "virman":
+            yeni_virmanlar.append(yeni)
         eklenen += 1
+    eslesen += _virmanlari_esle(db, hesap, yeni_virmanlar)
+    # Ekstrenin kapsadığı günlerde yeni okumanın artık vermediği onaylanmamış eski satırlar (ör. ek hesabın iç aktarımı) kalkar
+    tarihler = [x["tarih"] for x in satirlar if x.get("tarih")]
+    kalkan = 0
+    for kalanlar in eski_taslak.values():
+        for e in kalanlar:
+            if tarihler and min(tarihler) <= e.tarih.isoformat() <= max(tarihler) and not (e.ai_okuma or {}).get("elle"):
+                _taslagi_kaldir(db, e)
+                kalkan += 1
 
     if ilk_ekstre and not float(hesap.acilis_bakiyesi or 0):
         hesap.acilis_ekstreden = True  # açılış bakiyesi = ilk satırın bakiyesi - ilk satırın tutarı
     ekstre_tazele(db, hesap)
     if yeni_hesap:
-        notlar.append("Yeni banka hesabı açıldı: " + ", ".join(yeni_hesap))
+        notlar.append("Yeni banka hesabı açıldı: " + ", ".join(yeni_hesap) + ".")
     if elle_eslesen:
         notlar.append(f"{elle_eslesen} satır elle girdiğiniz hareketle eşleşti; ikinci kez yazılmadı.")
+    if yenilenen:
+        notlar.append(f"Onaylanmamış {yenilenen} satır yeniden okundu.")
+    if kalkan:
+        notlar.append(f"Ekstrede artık hareket sayılmayan onaylanmamış {kalkan} satır kaldırıldı.")
     if cek_eslesen:
         notlar.append(f"{cek_eslesen} satır kayıtlı çekle eşleşti; çek tahsil edildi/ödendi sayıldı, ikinci kez yazılmadı.")
     db.commit()
-    return {"eklenen": eklenen, "atlanan": atlanan, "atlanan_nedeni": atlanan_nedeni(db, hesap.id, atlananlar),
+    return {"eklenen": eklenen - yenilenen, "yenilenen": yenilenen, "atlanan": atlanan, "atlanan_nedeni": atlanan_nedeni(db, hesap.id, atlananlar),
             "eslesen": eslesen, "yeni_cari": yeni_cari, "hesap": hesap.ad, "yeni_hesap": yeni_hesap, "islenemeyen": islenemeyen, "notlar": " ".join(n for n in notlar if n)}

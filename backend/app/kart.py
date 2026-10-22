@@ -109,9 +109,23 @@ def banka_adi(metin: str) -> str | None:
     return next((ad for desen, ad in _BANKALAR if re.search(desen, s)), None)
 
 
+# Maskesiz yazılmış kart numarası ("4111111111111111 Kredi Kart Ödeme"); Luhn denetimi tutan 16 hane kabul edilir
+_ACIK_KART_NO = re.compile(r"(?<![\d*])([3-9]\d{3})[\s-]?(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})(?![\d*])")
+
+
+def _luhn(no: str) -> bool:
+    toplam = 0
+    for i, r in enumerate(reversed(no)):
+        d = int(r) * (2 if i % 2 else 1)
+        toplam += d - 9 if d > 9 else d
+    return toplam % 10 == 0
+
+
 def kart_son4(metin: str | None) -> str | None:
     m = KART_NO.search(metin or "")
-    return m.group(4) if m else None
+    if m:
+        return m.group(4)
+    return next((m.group(4) for m in _ACIK_KART_NO.finditer(metin or "") if _luhn("".join(m.groups()))), None)
 
 
 def taksit(aciklama: str) -> tuple[int, int] | None:

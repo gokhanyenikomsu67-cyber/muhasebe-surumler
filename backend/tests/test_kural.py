@@ -317,10 +317,10 @@ def test_ekstre_halkbank_bicimi():
     baska = client.post("/api/banka-hesaplari", json={"ad": "Diğer", "iban": "TR990000000000000000000001"}, headers=h).json()
     r = client.post(f"/api/banka-hesaplari/{baska['id']}/ekstre?yontem=kural",
                     files={"dosya": ("e.csv", csv.encode("cp1254"), "text/csv")}, headers=h)
-    # Başka hesap seçilse de ekstre IBAN'ına göre kendi hesabına işlenir (satırlar zaten var, atlanır)
-    assert (r.json()["hesap"], r.json()["eklenen"], r.json()["atlanan"]) == (banka["ad"], 0, 4)
+    # Başka hesap seçilse de ekstre IBAN'ına göre kendi hesabına işlenir (satırlar zaten var: yeniden okunur, eklenmez)
+    assert (r.json()["hesap"], r.json()["eklenen"], r.json()["yenilenen"]) == (banka["ad"], 0, 4)
     # Açılış bakiyesi ilk satırdan, ekstre bakiyesi son satırdan alınır; onaylanınca fark kalmaz
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in t.values()]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]}, headers=h)
     hesap = next(x for x in client.get("/api/banka-hesaplari", headers=h).json() if x["id"] == banka["id"])
     assert (hesap["acilis_bakiyesi"], hesap["ekstre_bakiye"], hesap["bakiye"], hesap["mutabakat_farki"]) == (0, -10018.73, -10018.73, 0)
 

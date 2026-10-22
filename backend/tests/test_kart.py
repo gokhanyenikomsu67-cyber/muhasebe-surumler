@@ -181,8 +181,13 @@ def test_hesap_ekstresi_kart_ekranindan_yuklenmez_atlananin_nedeni_yazar():
     r1 = client.post(yol, files={"dosya": ("HESAPEKSTRE_1.csv", veri, "text/csv")}, headers=h).json()
     assert r1["eklenen"] == 3
     r2 = client.post(yol, files={"dosya": ("HESAPEKSTRE_1.csv", veri, "text/csv")}, headers=h).json()
-    assert r2["eklenen"] == 0 and r2["atlanan"] == 3
-    assert "3 satır bu hesaba daha önce yüklenmiş" in r2["atlanan_nedeni"] and "onay bekliyor" in r2["atlanan_nedeni"]
+    # Onaylanmamış satırlar ikinci yüklemede yeniden okunur; elle düzeltilen satır korunur, atlanan satırın nedeni yazar
+    assert r2["eklenen"] == 0 and r2["yenilenen"] == 3 and "yeniden okundu" in r2["notlar"]
+    ilk = client.get("/api/hareketler?durum=taslak", headers=h).json()[0]
+    client.put(f"/api/hareketler/{ilk['id']}", json={**ilk, "aciklama": ilk["aciklama"] + " (düzeltildi)"}, headers=h)
+    r3 = client.post(yol, files={"dosya": ("HESAPEKSTRE_1.csv", veri, "text/csv")}, headers=h).json()
+    assert (r3["eklenen"], r3["yenilenen"], r3["atlanan"]) == (0, 2, 1)
+    assert "1 satır bu hesaba daha önce yüklenmiş" in r3["atlanan_nedeni"] and "onay bekliyor" in r3["atlanan_nedeni"]
     # Yanlış yüklenen kart ekstresi toplu silinince, onun için kendiliğinden açılan ve başka yerde kullanılmayan
     # cariler de silinir; önceden var olan cari kalır
     client.post("/api/hareketler/toplu-sil", json={"idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]}, headers=h)

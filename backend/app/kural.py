@@ -2003,15 +2003,30 @@ def _sutunlar(baslik: list) -> dict | None:
         elif a in ("b/a", "ba", "b / a", "borc/alacak", "borc / alacak", "yon", "islem yonu", "(b/a)", "+/-"):
             sutun.setdefault("yon", i)
         elif "bakiye" in a:
-            sutun.setdefault("bakiye", i)
+            if "ek hesap" in a or "kmh" in a:  # İş Bankası "Ek Hesap Bakiyesi" (KMH): asıl bakiyeyle toplanır
+                sutun.setdefault("ek_hesap", i)
+            else:
+                sutun.setdefault("bakiye", i)
         elif a in ("borc", "borc tutari", "cikan", "giden", "cikis") or a.startswith("borc"):
             sutun.setdefault("borc", i)
         elif a in ("alacak", "alacak tutari", "giren", "gelen", "giris") or a.startswith("alacak"):
             sutun.setdefault("alacak", i)
         elif "tutar" in a or a == "miktar":
             sutun.setdefault("tutar", i)
-        elif any(k in a for k in ("aciklama", "islem", "detay", "karsi taraf", "gonderen", "alici")):
-            sutun.setdefault("aciklama", i)
+        elif "aciklama" in a:
+            # Asıl açıklama sütunu "İşlem"/"İşlem Tipi" gibi kod sütunlarından önce gelir (İş Bankası: "EF", "FAST")
+            if "aciklama" in sutun and "aciklama" not in adlar[sutun["aciklama"]]:
+                sutun["islem"] = sutun["aciklama"]
+                sutun["aciklama"] = i
+            else:
+                sutun.setdefault("aciklama", i)
+        elif "islem tipi" in a or "islem turu" in a:
+            sutun.setdefault("islem_tipi", i)
+        elif any(k in a for k in ("islem", "detay", "karsi taraf", "gonderen", "alici")):
+            if "aciklama" in sutun:
+                sutun.setdefault("islem", i)
+            else:
+                sutun["aciklama"] = i
     if "tarih" in sutun and ("tutar" in sutun or "borc" in sutun or "alacak" in sutun):
         return sutun
     return None
@@ -2065,19 +2080,46 @@ def ekstre_tablo_oku(veri: bytes, mime: str) -> list[dict]:
         if not tutar:
             continue
         aciklama = str(hucre(satir, "aciklama") or "").strip()
+        # "İşlem Tipi" (Ek Hesap, Para Çekme, Kredi Kartı...) türü bulmaya yardım eder; kod değil ad ise açıklamaya eklenir
+        tip = str(hucre(satir, "islem_tipi") or "").strip()
+        if aciklama and len(tip) > 4 and sade(tip) not in sade(aciklama):
+            aciklama = f"{aciklama} ({tip})"
         if not aciklama:  # açıklama sütunu tanınmadıysa diğer metin hücrelerini birleştir
             aciklama = " ".join(str(v) for j, v in enumerate(satir) if isinstance(v, str) and j not in sutun.values()).strip()
-        sonuc.append({"tarih": tarih.isoformat(), "aciklama": aciklama, "tutar": round(tutar, 2),
-                      "bakiye": para_coz(hucre(satir, "bakiye"))})
+        bakiye = para_coz(hucre(satir, "bakiye"))
+        if bakiye is not None and "ek_hesap" in sutun:
+            bakiye = round(bakiye + (para_coz(hucre(satir, "ek_hesap")) or 0), 2)
+        sonuc.append({"tarih": tarih.isoformat(), "aciklama": aciklama, "tutar": round(tutar, 2), "bakiye": bakiye})
     if not sonuc:
         raise KuralHatasi("Ekstrede okunabilen hareket satırı bulunamadı.")
+    if "ek_hesap" in sutun:
+        sonuc = _ek_hesap_ici_ayikla(sonuc)
     return sonuc
+
+
+def _ek_hesap_ici_ayikla(satirlar: list[dict]) -> list[dict]:
+    """Ek hesaplı (KMH) ekstrede bakiye = hesap bakiyesi + ek hesap bakiyesi. Ek hesap borcunun hesaptan kapatılması
+    ("KMH-ANAPARA BORCU TAHSİLATI") bu toplamı değiştirmez: hesabın içinde iki bölme arası aktarımdır, hareket sayılmaz."""
+    yeniden_eskiye = satirlar[0]["tarih"] > satirlar[-1]["tarih"]
+    sirali = list(reversed(satirlar)) if yeniden_eskiye else list(satirlar)
+    kalan, onceki = [], None
+    for s in sirali:
+        b = s["bakiye"]
+        if onceki is not None and b is not None and abs(b - onceki) < 0.01:
+            continue
+        if onceki is None and re.search(r"\bkmh\b.*anapara|anapara.*\bkmh\b", sade(s["aciklama"])):
+            continue
+        kalan.append(s)
+        if b is not None:
+            onceki = b
+    return list(reversed(kalan)) if yeniden_eskiye else kalan
 
 
 GENEL_KELIMELER = {"ltd", "sti", "as", "a.s", "a.s.", "san", "tic", "ins", "insaat", "ve", "limited", "sirketi", "anonim",
                    "ticaret", "sanayi", "taahhut", "ith", "ihr", "pazarlama", "ltd.", "sti.", "san.", "tic.", "ins."}
 MASRAF_KELIMELERI = ["masraf", "komisyon", "bsmv", "ucret", "aidat", "kesinti", "faiz", "kkdf", "eft ucr", "havale ucr",
-                     "gider vergisi", "kmh", "gayrinakdi", "ekspertiz", "degerli kagit"]
+                     "gider vergisi", "kmh", "gayrinakdi", "ekspertiz", "degerli kagit", "sigorta prim", "police", "prim tahsil",
+                     "fonfz", "kred.mev.vergi", "kredi mevduat vergi"]
 VIRMAN_KELIMELERI = ["hesaplar arasi", "hesaplarim arasi", "hesaplar aras", "virman", "kendi hesab", "dbs hesab",
                      "hesabima transfer", "hesaba aktar", "vadeli h"]
 NAKIT_CEKIM = re.compile(r"nakit cek|para cek|atm.*cek|kasaya")
@@ -2180,6 +2222,9 @@ def virman_mi(aciklama: str, kendi: list[str], tutar: float = 0) -> bool:
         # Gidende ilk alan kullanıcının serbest açıklamasıdır ("afsa grup ... cari ödeme"), ona bakılmaz.
         parcalar = s.split(",")
         alanlar = parcalar[1:2] if tutar < 0 and len(parcalar) > 2 else parcalar[:1] if tutar > 0 else parcalar[:2]
+        ham = _karsi_alan(aciklama, tutar)
+        if ham:
+            alanlar = [*alanlar, sade(ham)]
         for alan in alanlar:
             kelimeler = re.sub(r"[^a-z0-9 ]", " ", alan).split()
             if kelimeler[:len(kendi)] == kendi:
@@ -2191,9 +2236,10 @@ def tur_tahmin(tutar: float, aciklama: str, cari_id: int | None, kendi: list[str
     s = sade(aciklama)
     # Takas, çek tahsili, "ÇEK : 1000021 ..." ya da "0001000019  10100011 00000000 10101594" (çek no + hesap) satırları
     if ("takas" in s or ("cek" in s and "tahsil" in s) or re.match(r"cek\s*(no)?\s*:", s)
-            or re.match(r"0*\d{7,10}\s+\d{8}\s+0{8}\s+\d{8}\s*$", s)):
+            or re.match(r"0*\d{7,10}\s+\d{8}\s+0{8}\s+\d{8}\s*$", s)
+            or (re.search(r"\bcek\b", s) and re.search(r"\btks\b|\bodeme\b|\byatan\b", s))):  # "ÇEK 206/0038*TKS ÖDEME"
         return "cek_tahsil" if tutar > 0 else "cek_odeme"
-    if tutar < 0 and NAKIT_CEKIM.search(s):
+    if tutar < 0 and NAKIT_CEKIM.search(s) and not ("kart" in s and "borc" in s):  # "KRE.KART BORÇ ÖDEME (Para Çekme)" kart ödemesidir
         return "nakit_cekim"
     if tutar > 0 and NAKIT_YATIRMA.search(s):
         return "nakit_yatirma"
@@ -2268,30 +2314,75 @@ def tr_buyuk(metin: str) -> str:
     return metin.replace("i", "İ").replace("ı", "I").upper()
 
 
-def karsi_taraf(aciklama: str, tutar: float, kendi: list[str]) -> dict | None:
-    """EFT/havale açıklamasından karşı tarafın ünvanını (ve açık yazılmışsa IBAN'ını) çıkarır.
+def _iban_alani(alan: str) -> bool:
+    return re.match(r"TR\d{2}[\d*\s]{6,}", alan.replace(" ", "")) is not None
 
-    Halkbank vb. biçim: giden 'açıklama, ALICI ÜNVANI, ALICI BANKA, IBAN, ...';
-    gelen 'GÖNDEREN ÜNVANI, GÖNDEREN ÜNVANI 'DAN açıklama, ...'.
+
+def _karsi_alan(aciklama: str, tutar: float) -> str | None:
+    """Açıklamada karşı tarafın adının yazdığı alan (süzülmemiş). Bilinen düzenler genel kurallarla tanınır:
+    - DBS: "... REF NOLU TEDARİKÇİ DBS K" ya da "ref |fatura no |GÖNDEREN|TEDARİKÇİ DBS"
+    - Yıldızlı (İş Bankası vb.): "KARŞI TARAF*IBAN ya da banka kodu*açıklama*referans"
+    - Virgüllü (Halkbank vb.): "açıklama, KARŞI TARAF, [BANKA], IBAN, ..." (ad virgül içerebilir; banka/IBAN alanına kadar)
+      ya da gelen "GÖNDEREN, GÖNDEREN 'DAN açıklama, ..."
     """
-    if "|" in aciklama:  # DBS: "ref |fatura no |GÖNDEREN|TEDARİKÇİ DBS"
-        ad = re.sub(r"\s+DBS\s*$", "", aciklama.split("|")[-1].strip(), flags=re.IGNORECASE)
-        parcalar = [aciklama, ad]
-    else:
-        parcalar = [p.strip() for p in aciklama.split(",")]
+    m = re.search(r"REF\s*NOLU\s+(.+?)\s+DBS\b", aciklama, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    if "|" in aciklama:
+        return re.sub(r"\s+DBS\s*$", "", aciklama.split("|")[-1].strip(), flags=re.IGNORECASE)
+    if re.sub(r"\*{3,}", "", aciklama).count("*") >= 2:  # maskeli IBAN'daki yıldızlar ayıraç değildir
+        # Genelde ilk alan karşı taraftır; ilk alan gönderenin serbest açıklamasıysa ("FİRMAMIZ BANKA GEÇİŞ*ÖRNEK ENERJİ LTD*...")
+        # banka adı taşımayan, harfli ilk alan alınır
+        for alan in [a.strip() for a in aciklama.split("*")[:3]]:
+            if len(re.sub(r"[^a-z]", "", sade(alan))) >= 4 and not BANKA_ADI.search(sade(alan)) and not re.match(r"^[\d\s/.-]+$", alan):
+                return alan
+    # Tutardaki ondalık virgülü ("112.913,34 USD") alan ayıracı sayılmaz
+    parcalar = [p.strip() for p in re.sub(r"(?<=\d),(?=\d)", ".", aciklama).split(",")]
     if len(parcalar) < 2:
         return None
-    if "|" in aciklama:
-        pass
-    elif tutar < 0:
-        if len(parcalar) < 3 or not (BANKA_ADI.search(sade(parcalar[2])) or re.search(r"TR\d{2}", parcalar[2])):
-            return None
-        ad = parcalar[1]
-    else:
+    if tutar > 0:
         ad = re.split(r"\s*'\s*DAN\b|\s*/", parcalar[0], flags=re.IGNORECASE)[0]
-        if not (sade(parcalar[1]).startswith(sade(ad)[:10]) or BANKA_ADI.search(sade(" ".join(parcalar[1:])))):
-            return None
-    ad = " ".join(ad.split())
+        if ad and sade(parcalar[1]).startswith(sade(ad)[:10]):
+            return ad
+    i = next((j for j in range(2, len(parcalar)) if BANKA_ADI.search(sade(parcalar[j])) or _iban_alani(parcalar[j])), None)
+    if i:
+        return ", ".join(p for p in parcalar[1:i] if p)
+    if tutar > 0 and BANKA_ADI.search(sade(" ".join(parcalar[1:]))):
+        return re.split(r"\s*'\s*DAN\b|\s*/", parcalar[0], flags=re.IGNORECASE)[0]
+    return None
+
+
+def ekstre_kalibi(aciklama: str, tutar: float) -> str:
+    """Ekstre satırının tekrar eden kalıbı: karşı tarafın adı ya da rakamları atılmış açıklamanın başı. Kullanıcının bu
+    satır için seçtiği cari hatırlanır, aynı kalıp sonraki ekstrelerde gelince o cariye işlenir."""
+    ad = _karsi_alan(aciklama, tutar)
+    if ad and ad_anahtari(ad):
+        return "ekstre:ad:" + ad_anahtari(ad)[:120]
+    return "ekstre:metin:" + " ".join(ad_anahtari(re.sub(r"\d+", " ", aciklama)).split()[:6])
+
+
+def hesap_numaralari(aciklama: str) -> list[str]:
+    """Açıklamada geçen hesap numaraları ("1234/0567890", "1000-10102222", "AB001234"): kendi hesaplarımızdan hangisine
+    gidildiğini IBAN'ın sonuyla karşılaştırmak için."""
+    return [m.lstrip("0") for m in re.findall(r"(?<![\d*])\d{7,12}(?![\d*])", aciklama) if len(m.lstrip("0")) >= 6]
+
+
+def vadeli_hesap_no(aciklama: str) -> str | None:
+    """Vadeli hesap açılışı/kapanışı satırındaki vadeli hesap numarası ("AB001234 NOLU VADELİ HSP AÇILIŞI")."""
+    s = sade(aciklama)
+    if not re.search(r"vadeli|hesabin kapatilip|hsp acilis", s):
+        return None
+    m = re.search(r"\b([A-Z]{2}\d{5,8})\b", aciklama.upper())
+    return m.group(1) if m else None
+
+
+def karsi_taraf(aciklama: str, tutar: float, kendi: list[str]) -> dict | None:
+    """EFT/havale açıklamasından karşı tarafın ünvanını (ve açık yazılmışsa IBAN'ını) çıkarır; şirketin kendisi,
+    banka adı, numara ya da çok kısa metin karşı taraf sayılmaz."""
+    ad = _karsi_alan(aciklama, tutar)
+    if not ad:
+        return None
+    ad = " ".join(re.sub(r"\s+DBS(\s+K)?\s*$", "", ad, flags=re.IGNORECASE).split()).strip(" ,.-")
     kelimeler = re.sub(r"[^a-z0-9 ]", " ", sade(ad)).split()
     if len(re.sub(r"[^a-z]", "", sade(ad))) < 4 or BANKA_ADI.search(sade(ad)) or re.search(r"\d{5,}", ad):
         return None
@@ -2299,7 +2390,12 @@ def karsi_taraf(aciklama: str, tutar: float, kendi: list[str]) -> dict | None:
         return None
     if ad == ad.lower():
         ad = tr_buyuk(ad)
-    iban = next((re.sub(r"\s", "", m.group()) for m in re.finditer(IBAN_DESENI, aciklama)), None)
+    # Karşı tarafın IBAN'ı adından hemen sonra yazandır; açıklamanın sonundaki IBAN çoğu zaman bizim hesabımızdır
+    ham = _karsi_alan(aciklama, tutar) or ""
+    m = re.search(r"(?:^|[,*|])\s*" + re.escape(ham), aciklama) if ham else None  # ad kendi alanında (açıklamanın içinde değil)
+    sonrasi = aciklama[m.end():] if m else ""
+    alan = re.split(r"[,*|]", sonrasi.lstrip(",*| "), maxsplit=2)
+    iban = next((re.sub(r"\s", "", m.group()) for a in alan[:2] if (m := re.fullmatch(f"\\s*({IBAN_DESENI})\\s*", a))), None)
     return {"unvan": ad, "iban": iban}
 
 
@@ -2359,9 +2455,21 @@ def ekstre_kural_oku(veri: bytes, mime: str, cariler: list[dict], sirket_unvan: 
             satirlar.append({**s, "onerilen_cari_id": None, "onerilen_tur": "banka_masrafi", "onerilen_cari": None,
                              "karsi_hesap": None, "onerilen_gider_turu": None})
             continue
-        cari_id = cari_eslestir(s["aciklama"], cariler)
+        # Açıklamada karşı tarafın adı ayrı alanda yazıyorsa cari o addan (ve IBAN'ından) aranır; açıklamanın serbest
+        # metnindeki başka firma adı ("örnek metal damga vergisi, KARAYOLLARI ...") cari sanılmaz. Ad bizim firmamızsa virmandır.
+        ad = _karsi_alan(s["aciklama"], s["tutar"])
+        adk = re.sub(r"[^a-z0-9 ]", " ", sade(ad or "")).split()
+        if ad and kendi and adk[:len(kendi)] == kendi:
+            cari_id = None
+        elif ad and len(re.sub(r"[^a-z]", "", sade(ad))) >= 4:
+            k = karsi_taraf(s["aciklama"], s["tutar"], kendi)
+            cari_id = cari_eslestir(f"{ad} {(k or {}).get('iban') or ''}", cariler)
+        else:
+            cari_id = cari_eslestir(s["aciklama"], cariler)
         tur = tur_tahmin(s["tutar"], s["aciklama"], cari_id, kendi)
-        karsi = karsi_taraf(s["aciklama"], s["tutar"], kendi) if not cari_id and tur in ("tahsilat", "odeme") else None
+        karsi = karsi_taraf(s["aciklama"], s["tutar"], kendi) if not cari_id and tur in ("tahsilat", "odeme", "diger", "masraf") else None
+        if karsi and tur in ("diger", "masraf"):  # açıklamada karşı tarafın adı açıkça yazıyorsa para ona gitmiş/ondan gelmiştir
+            tur = "tahsilat" if s["tutar"] > 0 else "odeme"
         satirlar.append({**s, "onerilen_cari_id": cari_id, "onerilen_tur": tur, "onerilen_cari": karsi,
                          "karsi_hesap": karsi_hesap(s["aciklama"], iban) if tur == "virman" else None,
                          "onerilen_gider_turu": gider_turu_tahmin(s["aciklama"]) if tur == "masraf" else None})

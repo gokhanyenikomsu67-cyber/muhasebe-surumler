@@ -3080,7 +3080,7 @@ function ekstreYukleAc(hesapId = null) {
             const r = await api(secilen ? `/api/banka-hesaplari/${secilen}/ekstre?yontem=${OKUMA_YONTEMI}`
               : `/api/ekstre-yukle?yontem=${OKUMA_YONTEMI}`, { metod: "POST", dosya: fd });
             y.metin = `${r.hesap}: ${r.eklenen} yeni satır${r.atlanan ? ` · ${r.atlanan_nedeni || `${r.atlanan} atlandı`}` : ""}${r.eslesen ? `, ${r.eslesen} transfer diğer hesaptaki kayıtla eşleşti` : ""}${r.yeni_cari ? `, ${r.yeni_cari} yeni cari açıldı` : ""}${r.notlar ? " · " + r.notlar : ""}`;
-            y.eklenen = r.eklenen; y.islenemeyen = r.islenemeyen?.length ? r.islenemeyen : null;
+            y.eklenen = r.eklenen + (r.yenilenen || 0); y.islenemeyen = r.islenemeyen?.length ? r.islenemeyen : null;
             if (r.yeni_hesap?.length) listeyiTazele("banka-hesaplari");
           } catch (e) {
             y.metin = "Hata: " + e.message;

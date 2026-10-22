@@ -29,15 +29,19 @@ def kartlar(db: Session, sirket_id: int) -> list[BankaHesabi]:
     return list(db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == sirket_id, BankaHesabi.tur == KART)))
 
 
-def odeme_karti(kart_listesi: list[BankaHesabi], aciklama: str) -> BankaHesabi | None:
-    """Banka ekstresindeki kart borcu ödemesinin hangi karta yapıldığı: açıklamadaki son 4 haneden, tek kart varsa o."""
+def odeme_karti(kart_listesi: list[BankaHesabi], aciklama: str, banka: str | None = None) -> BankaHesabi | None:
+    """Banka ekstresindeki kart borcu ödemesinin hangi karta yapıldığı: açıklamadaki son 4 haneden; numara yazmıyorsa
+    ödeyen bankanın tek kartı (banka bilinmiyorsa tek kart varsa o). Başka bankanın kartı tahmin edilmez."""
     if not kart_listesi or not kart.kart_odemesi_mi(aciklama):
         return None
     son4 = kart.kart_son4(aciklama)
     for k in kart_listesi:
         if k.kart_no and son4 and k.kart_no[-4:] == son4:
             return k
-    return kart_listesi[0] if len(kart_listesi) == 1 else None
+    if son4:
+        return None
+    adaylar = [k for k in kart_listesi if k.banka == banka] if banka else kart_listesi
+    return adaylar[0] if len(adaylar) == 1 else None
 
 
 def kart_ilgili(db: Session, *hesap_idleri: int | None) -> bool:

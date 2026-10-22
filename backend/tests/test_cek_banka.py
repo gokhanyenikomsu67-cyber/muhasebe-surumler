@@ -117,10 +117,12 @@ def test_ekstre_okuma(monkeypatch):
     # Taslaklar bakiyeyi etkilemez
     assert banka_bakiye(h, banka["id"]) == 1000
 
-    # Aynı ekstre tekrar yüklenince satırlar atlanır
+    # Aynı ekstre tekrar yüklenince yeni satır eklenmez; onaylanmamış satırlar yeniden okunur
     r = client.post(f"/api/banka-hesaplari/{banka['id']}/ekstre?yontem=ai", files={"dosya": ("ekstre.xlsx", tampon.getvalue())}, headers=h)
     j = r.json()
-    assert (j["eklenen"], j["atlanan"], j["yeni_cari"], j["islenemeyen"]) == (0, 4, 0, [])
+    assert (j["eklenen"], j["yenilenen"], j["atlanan"], j["yeni_cari"], j["islenemeyen"]) == (0, 4, 0, 0, [])
+    taslaklar = client.get("/api/hareketler?durum=taslak", headers=h).json()
+    assert len(taslaklar) == 4
 
     client.post("/api/hareketler/onayla", json={"idler": [t["id"] for t in taslaklar]}, headers=h)
     assert banka_bakiye(h, banka["id"]) == round(1000 + 5000 - 2000 - 12.5 - 100, 2)
