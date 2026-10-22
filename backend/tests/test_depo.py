@@ -105,16 +105,18 @@ def test_bordro_excelinden_personel_sgk():
     v = r.json()
     assert v["donem"] == "2026-09" and [x["personel"] for x in v["kisiler"]] == ["PERSONEL BİR", "PERSONEL İKİ"]  # TOPLAM alınmaz
     bir = v["kisiler"][0]
-    assert (bir["brut"], bir["net"], bir["sgk_isci"], bir["vergi"], bir["gun"], bir["tutar"]) == (1000, 825, 150, 25, 30, 1000)
-    kayit = {"cari_id": taseron["id"], "donem": v["donem"], "santiye_id": s["id"], "isveren_orani": 10, "kisiler": v["kisiler"]}
+    assert (bir["brut"], bir["net"], bir["sgk_isci"], bir["vergi"], bir["gun"]) == (1000, 825, 150, 25, 30)
+    kayit = {"cari_id": taseron["id"], "donem": v["donem"], "santiye_id": s["id"], "kisiler": v["kisiler"]}  # SGK oranı varsayılan 37,75
     assert client.post("/api/taseron-giderleri/bordro", json=kayit, headers=h).json() == {"eklenen": 2, "guncellenen": 0}
-    assert _bakiye(h, taseron["id"]) == 1650  # brüt 1500 + %10 işveren payı
+    # SGK masrafı = normal kazanç x %37,75; taşerona net + vergi + SGK masrafı: (825+25+377,5) + (425+188,75)
+    assert _bakiye(h, taseron["id"]) == 1841.25
     # Aynı ay ikinci kez yüklenince çift yazılmaz
     assert client.post("/api/taseron-giderleri/bordro", json=kayit, headers=h).json() == {"eklenen": 0, "guncellenen": 2}
     sayfa = client.get(f"/api/taseron/{taseron['id']}", headers=h).json()
-    assert sayfa["ozet"]["personel"] == 1650 and len(sayfa["personel"]) == 2
+    assert sayfa["ozet"]["personel"] == 1841.25 and len(sayfa["personel"]) == 2
+    assert [x["sgk_isci"] for x in sayfa["personel"]] == [377.5, 188.75]
     ekstre = client.get(f"/api/raporlar/cari-ekstre/{taseron['id']}", headers=h).json()["satirlar"]
-    assert [(x["belge"], x["borc"]) for x in ekstre] == [("2026-09", 1650)]  # ekstrede ay tek satır
+    assert [(x["belge"], x["borc"]) for x in ekstre] == [("2026-09", 1841.25)]  # ekstrede ay tek satır
     wb = load_workbook(io.BytesIO(client.get(f"/api/excel/taseron/{taseron['id']}", headers=h).content))
     assert wb.sheetnames == ["Özet", "Verilen Paralar", "Fatura Çıkışları", "Elden Harcamalar", "Personel SGK"]
     # Taşeronu olan cari silinemez

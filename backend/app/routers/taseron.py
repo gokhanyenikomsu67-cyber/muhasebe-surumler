@@ -147,7 +147,7 @@ def _gider_yaz(db: Session, g: TaseronGider, veri: GiderGiris, k: Kullanici):
     for alan in ("cari_id", "tur", "tarih", "aciklama", "santiye_id", "depo_id", "donem", "personel", "tckn", "gun",
                  "brut", "net", "sgk_isci", "vergi", "isveren"):
         setattr(g, alan, getattr(veri, alan))
-    g.tutar = personel_toplami(veri) if veri.tur == "personel" else _yuvarla(veri.tutar)
+    g.tutar = personel_toplami(veri) if veri.tur == "personel" and not veri.tutar else _yuvarla(veri.tutar)
     if not g.tutar:
         raise HTTPException(422, "Tutarı yazın.")
     if veri.tur == "personel" and not (veri.personel or "").strip():
@@ -306,10 +306,7 @@ def bordro_oku(veri: bytes, dosya_adi: str | None = None) -> dict:
 
 @router.post("/taseron-giderleri/bordro-onizle")
 async def bordro_onizle(dosya: UploadFile = File(...), k: Kullanici = Depends(yazabilir)):
-    sonuc = bordro_oku(dosyayi_oku(dosya), dosya.filename)
-    for x in sonuc["kisiler"]:
-        x["tutar"] = personel_toplami(type("G", (), x))
-    return sonuc
+    return bordro_oku(dosyayi_oku(dosya), dosya.filename)
 
 
 class BordroKaydi(BaseModel):
@@ -317,8 +314,20 @@ class BordroKaydi(BaseModel):
     donem: str
     santiye_id: int | None = None
     depo_id: int | None = None
-    isveren_orani: float = 0  # bordroda işveren payı yoksa brüt ücretin yüzdesi olarak eklenir
+    sgk_orani: float = 37.75  # SGK masrafı = bordrodaki normal kazanç (brüt) x oran (işçi + işveren payları)
     kisiler: list[dict]
+
+
+def bordro_satiri(x: dict, sgk_orani: float) -> dict:
+    """Taşerona yazılacak: net ödenen + vergiler + icra + SGK masrafı (brüt x oran). Oran yoksa brüt + işveren payı.
+    İcra, brütten net, işçi SGK ve vergi düşülünce kalandır (bordroda ayrı sütun olmasa da)."""
+    brut, net = _yuvarla(x.get("brut")), _yuvarla(x.get("net"))
+    vergi, sgk_bordro = float(x.get("vergi") or 0), float(x.get("sgk_isci") or 0)
+    if not (sgk_orani and brut is not None and net is not None):
+        return {"sgk": _yuvarla(x.get("sgk_isci")), "tutar": personel_toplami(type("G", (), x))}
+    icra = max(0.0, round(brut - net - sgk_bordro - vergi, 2))
+    sgk = round(brut * sgk_orani / 100, 2)
+    return {"sgk": sgk, "tutar": round(net + vergi + icra + sgk, 2)}
 
 
 @router.post("/taseron-giderleri/bordro")
@@ -333,15 +342,12 @@ def bordro_kaydet(istek: BordroKaydi, db: Session = Depends(get_db), k: Kullanic
         TaseronGider.donem == istek.donem))}
     yeni = guncel = 0
     for x in istek.kisiler:
-        brut = _yuvarla(x.get("brut"))
-        isveren = _yuvarla(x.get("isveren"))
-        if isveren is None and istek.isveren_orani and brut:
-            isveren = round(brut * istek.isveren_orani / 100, 2)
+        hesap = bordro_satiri(x, istek.sgk_orani)
         veri = GiderGiris(cari_id=istek.cari_id, tur="personel", tarih=tarih, donem=istek.donem,
                           santiye_id=istek.santiye_id, depo_id=istek.depo_id,
-                          personel=(x.get("personel") or "").strip(), tckn=x.get("tckn"), gun=x.get("gun"), brut=brut,
-                          net=_yuvarla(x.get("net")), sgk_isci=_yuvarla(x.get("sgk_isci")), vergi=_yuvarla(x.get("vergi")),
-                          isveren=isveren, aciklama=("İcra kesintisi " + f"{float(x['icra']):,.2f}") if x.get("icra") else None)
+                          personel=(x.get("personel") or "").strip(), tckn=x.get("tckn"), gun=x.get("gun"), brut=_yuvarla(x.get("brut")),
+                          net=_yuvarla(x.get("net")), sgk_isci=hesap["sgk"], vergi=_yuvarla(x.get("vergi")), tutar=hesap["tutar"],
+                          aciklama=("İcra kesintisi " + f"{float(x['icra']):,.2f}") if x.get("icra") else None)
         g = eski.get((veri.personel, veri.tckn or ""))
         if g is None:
             g = TaseronGider(sirket_id=k.sirket_id)
@@ -491,7 +497,7 @@ def excel_taseron(cari_id: int, db: Session = Depends(get_db), k: Kullanici = De
            x["kdv"], x["toplam"]] for x in v["kalemler"]]),
         ("Elden Harcamalar", ["Tarih", "Açıklama", "Şantiye", "Tutar"],
          [[x["tarih"], x["aciklama"], x["santiye_ad"], x["tutar"]] for x in v["elden"]]),
-        ("Personel SGK", ["Dönem", "Personel", "TC", "Gün", "Brüt", "Net", "SGK işçi", "Vergi", "İşveren payı", "Toplam"],
+        ("Personel SGK", ["Dönem", "Personel", "TC", "Gün", "Normal kazanç", "Net", "SGK masrafı", "Vergi", "İşveren payı", "Toplam"],
          [[x["donem"], x["personel"], x["tckn"], x["gun"], x["brut"], x["net"], x["sgk_isci"], x["vergi"], x["isveren"], x["tutar"]]
           for x in v["personel"]]),
     ]

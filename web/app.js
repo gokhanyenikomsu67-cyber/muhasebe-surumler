@@ -567,12 +567,22 @@ function taseronAc(cariId = null) {
           } catch (err) { bildir(err.message, true); }
         } });
         el.append(ACIKLAMA("Taşeronun personeline ödenen ücret ve SGK. Bordro Excel'ini yükleyin (Adı Soyadı, TCKN, T.Gün, Nor.Kazanç, SSK İşçi, "
-          + "İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları); taşerona brüt ücret (+ işveren payı) borç yazılır."),
+          + "İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları). SGK masrafı = normal kazanç x %37,75; taşerona net ödenen + vergi + SGK masrafı borç yazılır."),
           h("div", { class: "liste-ust" }, dosyaG, h("button", { class: "dugme ana", onclick: () => dosyaG.click() }, "Bordro Excel'i yükle")));
         const b = durumu.bordro;
         if (b) {
           const donemI = h("input", { type: "month", value: b.donem || "" });
-          const oranI = h("input", { type: "number", step: "any", value: localStorage.getItem("isveren_orani") || "0", style: "width:70px" });
+          if (b.oran == null) { try { b.oran = localStorage.getItem("sgk_orani"); } catch { /* yoksa varsayılan */ } b.oran = b.oran ?? "37.75"; }
+          const oranI = h("input", { type: "number", step: "any", value: b.oran, style: "width:70px", onchange: (e) => { b.oran = e.target.value; yenidenCiz(); } });
+          // SGK masrafı = normal kazanç x oran; taşerona net + vergi + icra + SGK masrafı (sunucudaki bordro_satiri ile aynı)
+          const oran = Number(b.oran) || 0;
+          for (const x of b.kisiler) {
+            if (oran && x.brut != null && x.net != null) {
+              const icra = Math.max(0, x.brut - x.net - (x.sgk_isci || 0) - (x.vergi || 0));
+              x.sgk = Math.round(x.brut * oran) / 100;
+              x.tutar = Math.round((x.net + (x.vergi || 0) + icra + x.sgk) * 100) / 100;
+            } else { x.sgk = x.sgk_isci; x.tutar = x.brut ?? (x.net || 0) + (x.sgk_isci || 0) + (x.vergi || 0); }
+          }
           const sS = santiyeSec();
           const tumu = h("input", { type: "checkbox", checked: b.secili.size === b.kisiler.length,
             onchange: (e) => { b.kisiler.forEach((_, i) => (e.target.checked ? b.secili.add(i) : b.secili.delete(i))); yenidenCiz(); } });
@@ -580,10 +590,10 @@ function taseronAc(cariId = null) {
             if (!donemI.value) return bildir("Bordro ayını seçin.", true);
             const kisiler = b.kisiler.filter((_, i) => b.secili.has(i));
             if (!kisiler.length) return bildir("Personel seçin.", true);
-            try { localStorage.setItem("isveren_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
+            try { localStorage.setItem("sgk_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
             try {
               const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: v.cari.id, donem: donemI.value,
-                santiye_id: Number(sS.value) || null, isveren_orani: Number(oranI.value) || 0, kisiler } });
+                santiye_id: Number(sS.value) || null, sgk_orani: Number(oranI.value) || 0, kisiler } });
               bildir(`${r.eklenen} personel eklendi${r.guncellenen ? `, ${r.guncellenen} personel güncellendi` : ""}.`);
               durumu.bordro = null; yenidenCiz();
             } catch (err) { bildir(err.message, true); }
@@ -591,18 +601,18 @@ function taseronAc(cariId = null) {
           const secilen = b.kisiler.filter((_, i) => b.secili.has(i));
           el.append(h("fieldset", {}, h("legend", {}, `Bordro önizleme (${b.kisiler.length} personel). Taşerona ait olanları seçin`),
             h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Ay:", donemI, "Şantiye:", sS,
-              h("label", { title: "Bordroda işveren SGK payı yoksa brüt ücretin bu yüzdesi eklenir (0 = eklenmez)" }, "İşveren payı %: ", oranI),
+              h("label", { title: "SGK masrafı = normal kazanç x bu oran" }, "SGK oranı %: ", oranI),
               h("button", { class: "dugme ana", onclick: kaydet }, `Seçilenleri kaydet (${secilen.length})`),
               h("button", { class: "dugme", onclick: () => { durumu.bordro = null; yenidenCiz(); } }, "Vazgeç")),
             h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
-              h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Personel", "TC", "Gün", "Brüt", "Net ödenen", "SGK işçi", "Vergi", "Taşerona yazılacak"]
+              h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Personel", "TC", "Gün", "Normal kazanç", "Net ödenen", "SGK masrafı", "Vergi", "Taşerona yazılacak"]
                 .map((x, i) => h("th", { class: i > 2 ? "sayi" : "" }, x)))),
               h("tbody", {}, b.kisiler.map((x, i) => h("tr", {},
                 h("td", {}, h("input", { type: "checkbox", checked: b.secili.has(i), onchange: (e) => { e.target.checked ? b.secili.add(i) : b.secili.delete(i); yenidenCiz(); } })),
                 h("td", {}, x.personel), h("td", {}, x.tckn || ""), h("td", { class: "sayi" }, x.gun ?? ""),
-                ...["brut", "net", "sgk_isci", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(x[a])))))),
+                ...["brut", "net", "sgk", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(x[a])))))),
               h("tfoot", {}, h("tr", {}, h("td", { colspan: 4 }, "Seçilenlerin toplamı"),
-                ...["brut", "net", "sgk_isci", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(secilen.reduce((t, x) => t + (x[a] || 0), 0))))))))));
+                ...["brut", "net", "sgk", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(secilen.reduce((t, x) => t + (x[a] || 0), 0))))))))));
         }
         const elle = h("form", { class: "liste-ust", style: "flex-wrap:wrap", onsubmit: async (e) => {
           e.preventDefault();
@@ -616,11 +626,11 @@ function taseronAc(cariId = null) {
         } }, "Elle ekle:", h("input", { name: "donem", type: "month", value: bugun.slice(0, 7), required: true }),
           h("input", { name: "personel", placeholder: "Personel adı", required: true }),
           h("input", { name: "net", type: "number", step: "any", placeholder: "Net ücret", style: "width:100px" }),
-          h("input", { name: "sgk", type: "number", step: "any", placeholder: "SGK", style: "width:90px" }),
+          h("input", { name: "sgk", type: "number", step: "any", placeholder: "SGK masrafı", style: "width:100px" }),
           h("input", { name: "isveren", type: "number", step: "any", placeholder: "İşveren payı", style: "width:100px" }), santiyeSec(),
           h("button", { class: "dugme" }, "Ekle"));
-        el.append(elle, raporTablosu([["donem", "Ay"], ["personel", "Personel"], ["tckn", "TC"], ["gun", "Gün"], ["brut", "Brüt", "para"], ["net", "Net ödenen", "para"],
-          ["sgk_isci", "SGK işçi", "para"], ["vergi", "Vergi", "para"], ["isveren", "İşveren payı", "para"], ["tutar", "Taşerona yazılan", "para"], silKolonu],
+        el.append(elle, raporTablosu([["donem", "Ay"], ["personel", "Personel"], ["tckn", "TC"], ["gun", "Gün"], ["brut", "Normal kazanç", "para"], ["net", "Net ödenen", "para"],
+          ["sgk_isci", "SGK masrafı", "para"], ["vergi", "Vergi", "para"], ["isveren", "İşveren payı", "para"], ["tutar", "Taşerona yazılan", "para"], silKolonu],
         v.personel, { toplam: ["brut", "net", "sgk_isci", "vergi", "isveren", "tutar"] }));
       }
       durum(`${v.cari.unvan}: bakiye ${para(o.bakiye)} TL`);

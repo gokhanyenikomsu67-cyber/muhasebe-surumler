@@ -114,7 +114,7 @@ class TaseronGider(Base):
     gun: Mapped[int | None] = mapped_column(Integer)
     brut: Mapped[float | None] = mapped_column(Para)
     net: Mapped[float | None] = mapped_column(Para)  # personele ödenen net
-    sgk_isci: Mapped[float | None] = mapped_column(Para)  # SGK + işsizlik işçi payları
+    sgk_isci: Mapped[float | None] = mapped_column(Para)  # SGK masrafı (bordroda normal kazanç x oran)
     vergi: Mapped[float | None] = mapped_column(Para)  # gelir vergisi + damga vergisi
     isveren: Mapped[float | None] = mapped_column(Para)  # SGK + işsizlik işveren payları
     tutar: Mapped[float] = mapped_column(Para)  # cariye borç yazılan toplam
