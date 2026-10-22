@@ -519,9 +519,13 @@ def cekleri_oku(veri: bytes, pdf: bool, tani: bool = False) -> list[dict]:
                 if not c.get("hesap_no"):
                     c["belirsiz"].append("hesap_no")
                 for alan in ("vade", "tutar"):
+                    basili_okunus = c.get(alan)  # el yazısı hiç okunamazsa tahmin olarak kalır (kırmızı)
                     if alan in c["belirsiz"] or (alan == "vade" and c.get("vade")):
                         c[alan] = None
                     deger, emin = el.get(alan, (None, False))
+                    if deger is None and c.get(alan) is None and basili_okunus is not None:
+                        c[alan] = basili_okunus
+                        c.setdefault("nedenler", {})[alan] = el_yazisi.TAHMIN
                     if deger is not None:
                         c[alan] = deger.isoformat() if alan == "vade" else deger
                     if emin:

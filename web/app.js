@@ -2038,11 +2038,21 @@ function topluCekAc(yon = "alinan") {
         const toplam = dolu.reduce((t, x) => t + (Number(x.tutar) || 0), 0);
         ozet.textContent = `${dolu.length} çek · toplam ${para(toplam)}` + (dolu.some((x) => x.belirsiz?.length) ? " · kırmızı alanları kontrol edin" : "");
       };
+      const alanOnayla = (x, b) => {
+        x.belirsiz = (x.belirsiz || []).filter((y) => y !== b);
+        x.onaylanan = [...new Set([...(x.onaylanan || []), b])];
+      };
+      const satiriOnayla = (x) => { for (const b of [...(x.belirsiz || [])]) alanOnayla(x, b); };
       const hucre = (x, [a, , tip]) => {
         const kirmizi = x.belirsiz?.includes(a === "kesideci_vkn" ? "vkn" : a);
         const degisti = (deger) => {
           x[a] = deger;
-          x.belirsiz = (x.belirsiz || []).filter((b) => b !== (a === "kesideci_vkn" ? "vkn" : a));
+          const b = a === "kesideci_vkn" ? "vkn" : a;
+          if (x.belirsiz?.includes(b)) {  // elle düzeltilen kırmızı alan onaylanmış sayılır
+            alanOnayla(x, b);
+            girdi.classList.add("onayli"); girdi.title = "";
+            girdi.parentElement?.querySelector(".onay-tik")?.remove();
+          }
           girdi.classList.remove("belirsiz");
           sakla(); tazeleOzet();
         };
@@ -2057,12 +2067,18 @@ function topluCekAc(yon = "alinan") {
             onchange: (e) => degisti(tip === "para" ? sayiCoz(e.target.value) : e.target.value.trim() || null) });
           if (tip === "para") girdi.addEventListener("blur", () => { if (x[a] != null) girdi.value = para(x[a]); });
         }
-        if (kirmizi) {
-          girdi.classList.add("belirsiz");
-          if (x.nedenler?.[a]) girdi.title = x.nedenler[a];  // neden kırmızı: üstüne gelince görünür
-        }
         girdi.dataset.alan = a;
-        return h("td", {}, girdi);
+        const b = a === "kesideci_vkn" ? "vkn" : a;
+        if (x.onaylanan?.includes(b)) girdi.classList.add("onayli");
+        if (!kirmizi) return h("td", {}, girdi);
+        girdi.classList.add("belirsiz");
+        if (x.nedenler?.[a]) girdi.title = x.nedenler[a];  // neden kırmızı: üstüne gelince görünür
+        // ✓: okunan (ya da tahmin edilen) değer doğru; basınca onaylanır, hücre yeşile döner
+        const tik = h("button", { type: "button", class: "onay-tik", title: "Doğru, onayla", onclick: () => {
+          alanOnayla(x, b); girdi.classList.remove("belirsiz"); girdi.classList.add("onayli"); girdi.title = ""; tik.remove();
+          sakla(); tazeleOzet();
+        } }, "✓");
+        return h("td", { class: "onayli-hucre" }, h("div", { class: "hucre-tik" }, girdi, tik));
       };
       // Şantiye: listeden seçilir, yazarak aranır, yoksa "+ yeni şantiye aç"
       const santiyeHucresi = (x) => {
@@ -2093,8 +2109,11 @@ function topluCekAc(yon = "alinan") {
           ...TOPLU_CEK_ALANLARI.map((t) => hucre(x, t)),
           h("td", { class: "akibet-hucre" }, akibetSecici(yon, (x.akibet ||= {}), secenekler, sakla)),
           h("td", { class: "toplu-sorun" }, x.sorun ? h("span", { class: "negatif" }, x.sorun) : x.dosya_adi ? h("span", { class: "ipucu" }, x.dosya_adi) : ""),
-          h("td", {}, h("button", { type: "button", class: "dugme kucuk", title: "Satırı çıkar",
-            onclick: () => { satirlar.splice(i, 1); sakla(); ciz(); } }, "✕")))));
+          h("td", { class: "satir-dugmeler" },
+            x.belirsiz?.length ? h("button", { type: "button", class: "dugme kucuk onay-tik", title: "Bu satırdaki bütün kırmızı alanları onayla",
+              onclick: () => { satiriOnayla(x); sakla(); ciz(); } }, "✓ Tümü") : "",
+            h("button", { type: "button", class: "dugme kucuk", title: "Satırı çıkar",
+              onclick: () => { satirlar.splice(i, 1); sakla(); ciz(); } }, "✕")))));
         tazeleOzet();
       };
       const ekle = (yeni) => {
@@ -2220,6 +2239,12 @@ function topluCekAc(yon = "alinan") {
         h("div", { class: "dugmeler" },
           h("button", { type: "button", class: "dugme ana", onclick: () => this.kaydet() }, "Tümünü kaydet (F2)"),
           h("button", { type: "button", class: "dugme", onclick: () => this.kaydet(true) }, "Seçilenleri kaydet"),
+          h("button", { type: "button", class: "dugme", title: "Seçili satırlardaki bütün kırmızı alanları doğru say", onclick: () => {
+            const sec = satirlar.filter((x) => x._sec);
+            if (!sec.length) return bildir("Önce satır başındaki kutucuklardan çek seçin.", true);
+            sec.forEach(satiriOnayla); sakla(); ciz();
+            bildir(`${sec.length} satırdaki kırmızı alanlar onaylandı.`);
+          } }, "✓ Seçilenlerin kırmızılarını onayla"),
           h("button", { type: "button", class: "dugme tehlike", onclick: () => { satirlar = satirlar.filter((x) => !x._sec); sakla(); ciz(); } }, "Seçilenleri tablodan çıkar"),
           ozet)));
       this.satirlariCiz = ciz;
@@ -2229,6 +2254,8 @@ function topluCekAc(yon = "alinan") {
       const gidecek = satirlar.filter((x) => TOPLU_CEK_ALANLARI.some(([a]) => !["tur", "para_birimi", "alis_tarihi"].includes(a) && x[a] != null && x[a] !== "")
         && (!yalnizSecili || x._sec));
       if (!gidecek.length) return bildir(yalnizSecili ? "Kaydedilecek satır seçin." : "Tabloda kaydedilecek çek yok.", true);
+      const onaysiz = gidecek.filter((x) => x.belirsiz?.length);
+      if (onaysiz.length && !confirm(`${onaysiz.length} çekte onaylanmamış kırmızı alan var (${onaysiz.map((x) => x.cek_no || "?").slice(0, 6).join(", ")}${onaysiz.length > 6 ? "…" : ""}).\n\nKırmızı alanları çekle karşılaştırıp ✓ ile onaylamanız önerilir. Yine de kaydedilsin mi?`)) return;
       // Cari sütunu yok: sunucu alınan çekte çeki yazan firmayı, verilen çekte lehtarı cari yapar. Excel şablonunda
       // Cari yazılmış ve listede olmayan adlar için benzer cari varsa sorulur
       const bilinmeyen = [...new Map(gidecek.filter((x) => !x.cari_id && x.cari_unvan).map((x) => [aramaAnahtari(x.cari_unvan), x])).values()];

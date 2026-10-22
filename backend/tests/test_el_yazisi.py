@@ -56,3 +56,15 @@ def test_vade_basim_tarihinden_once_olamaz_ve_yil_okunmazsa_neden_yazilir():
     assert (t, emin) == (date(2027, 1, 6), False) and neden == el_yazisi.YIL_YOK
     # Kaşedeki telefonun "/" işareti tarih sanılmaz
     assert el_yazisi.vade_bul(["sM(0274)2/20101"], date(2026, 10, 21)) == (None, False)
+
+
+def test_diyez_bir_okunursa_ve_tahmin_bos_birakilmaz():
+    from datetime import date
+    from app import el_yazisi
+    assert el_yazisi.rakamdan_tutar(["TL#1200.000#"])[0] == 200000 and el_yazisi.rakamdan_tutar(["TL #150.000#"])[0] == 150000
+    # Rakam yok, yazı okundu: yazı esas alınır, kırmızı (onay bekler)
+    deger, emin, neden = el_yazisi.tutar_bul_nedenli(["ikiyuzelibn"])
+    assert deger == 250000.0 and not emin and neden == el_yazisi.RAKAM_YOK
+    t, emin, neden = el_yazisi.vade_bul_nedenli(["22 12"], date(2026, 10, 22))
+    assert (t, emin, neden) == (date(2026, 12, 22), False, el_yazisi.TAHMIN)
+    assert el_yazisi.vade_bul(["IBAN TR15 0001 2001 5460 0010 1006 63"], date(2026, 10, 22)) == (None, False)

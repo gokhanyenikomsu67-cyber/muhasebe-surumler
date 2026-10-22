@@ -141,11 +141,17 @@ def rakamdan_tutar(kutular: list[str]) -> tuple[int | None, str | None]:
         govde = re.sub(r"(?<=\d)\s+(?=\d)", "", re.sub(r"(?i)^\s*T?L?\s*[-#+TF]*\s*", "", kutu)).strip("#+. ")
         if not re.search(r"\d{3}", govde):
             continue
+        # El yazısı "#" işareti "1" okunabilir: "TL#1200.000#" -> "1200.000". Binlik gruplaması bozuksa (ilk grup 3 haneden
+        # uzun) baştaki 1'ler "#" sayılır
+        if (b := re.fullmatch(r"(1+)(\d{1,3})((?:[.,:;]\d{3})+(?:,\d{2})?)", govde)) and len(b.group(1) + b.group(2)) > 3:
+            govde = b.group(2) + b.group(3)
         m = re.fullmatch(r"(\d{1,3}(?:[.,:;]\d{3})+)(?:,\d{2})?", govde)  # nokta bazen ":" okunur
         return (int(re.sub(r"[.,:;]", "", m.group(1))) if m else None), re.sub(r"\D", "", govde)
     return None, None
 
 
+RAKAM_YOK = "Rakamla yazılan tutar okunamadı; yazıyla yazılan esas alındı."
+TAHMIN = "Net okunamadı; en yakın okunuş tahmin olarak yazıldı. Çekle karşılaştırıp onaylayın."
 NEDEN_UYUSMAZ = "Rakamla yazılan tutar yazıyla yazılanı tutmuyor; yazıyla yazılan esas alındı."
 
 
@@ -170,11 +176,18 @@ def tutar_bul_nedenli(kutular: list[str]) -> tuple[float | None, bool, str | Non
         if uyumlu:
             return float(yazi), puan >= 0.75, None if puan >= 0.75 else "Yazıyla tutar tam okunamadı."
         if puan >= 0.85 or (not rakamlar and puan >= 0.8):
-            return float(yazi), False, NEDEN_UYUSMAZ  # rakam başka okundu; yazı net: yazı geçerlidir
-    if serbest and serbest_puan >= 0.85 and serbest != rakam:
+            return float(yazi), False, NEDEN_UYUSMAZ if rakamlar else RAKAM_YOK  # yazı net: yazı geçerlidir
+    if rakam and serbest and serbest_puan >= 0.85 and serbest != rakam:
         return float(serbest), False, NEDEN_UYUSMAZ  # yazı net, rakam başka okundu (ör. bir hanesi düştü)
     if rakam:
         return float(rakam), False, "Yazıyla yazılan tutar okunamadı; rakamla yazılan önerildi."
+    # Tahmin (boş bırakılmaz, kırmızı kalır, kullanıcı onaylar): yazıya en çok benzeyen tutar, o da yoksa okunan rakamlar
+    if serbest and serbest_puan >= 0.5:
+        return float(serbest), False, TAHMIN
+    if yazi and puan >= 0.5:
+        return float(yazi), False, TAHMIN
+    if rakamlar and len(rakamlar) >= 5 and int(rakamlar):
+        return float(int(rakamlar)), False, TAHMIN
     return None, False, "Tutar okunamadı."
 
 
@@ -271,4 +284,18 @@ def _vade(kutular: list[str], bugun: date) -> tuple[date | None, bool, str | Non
                             return date(y, a, g), False, "Tarih net okunamadı."
                     except ValueError:
                         pass
+    # Tahmin: etiketsiz yazılmış gün ve ay ("20.01", "22 12"); uzun rakam dizileri (IBAN, MICR, VKN, telefon) hariç
+    for kutu in kutular:
+        k = kutu.translate(str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1"}))
+        if re.search(r"(?i)bas[ıi]m|bas\.?\s*trh", kutu) or len(re.findall(r"\d", k)) > 9 or "(" in k:
+            continue
+        for m in re.finditer(r"(?<!\d)(\d{2})\s*[.,/ -]\s*(\d{2})(?!\d)", k):
+            g, a = int(m.group(1)), int(m.group(2))
+            if 1 <= g <= 31 and 1 <= a <= 12:
+                for yil in (bugun.year, bugun.year + 1, bugun.year + 2):
+                    try:
+                        if (t := date(yil, a, g)) >= bugun - timedelta(days=60):
+                            return t, False, TAHMIN
+                    except ValueError:
+                        continue
     return None, False, "Vade okunamadı."
