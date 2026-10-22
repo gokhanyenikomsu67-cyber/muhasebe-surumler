@@ -504,6 +504,14 @@ def ekstre_yukle(hesap_id: int, dosya: UploadFile = File(...), yontem: str = "ot
             hesap.kart_no = f"**** **** **** {son4}"
         return kartlar.kart_ekstresi_isle(db, k, hesap, okunan, notlar)
 
+    okunan = _banka_ekstresi_oku(db, k, icerik, mime, yontem)
+    with KAYIT_KILIDI:  # iki ekstre aynı anda işlenirse aynı cari/hesap iki kez açılmasın
+        db.expire_all()  # okuma sürerken başka işlemin açtığı cariler görülsün
+        return _ekstre_kaydet(db, k, hesap, okunan)
+
+
+def _banka_ekstresi_oku(db: Session, k: Kullanici, icerik: bytes, mime: str, yontem: str) -> dict:
+    """Banka hesap ekstresini okur (Excel/CSV/PDF kurallarla, okunamazsa ve anahtar varsa yapay zekayla)."""
     cariler = db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)).all()
     cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban} for c in cariler]
     tablo = mime in ai.EKSTRE_TABLO_TURLERI or mime == "application/pdf"
@@ -521,9 +529,53 @@ def ekstre_yukle(hesap_id: int, dosya: UploadFile = File(...), yontem: str = "ot
             okunan = ai.ekstre_oku(icerik, mime, cari_listesi, GIDER_TURLERI)
     except (ai.OkumaHatasi, kural.KuralHatasi) as e:
         raise HTTPException(422, str(e)) from e
-    with KAYIT_KILIDI:  # iki ekstre aynı anda işlenirse aynı cari/hesap iki kez açılmasın
-        db.expire_all()  # okuma sürerken başka işlemin açtığı cariler görülsün
-        return _ekstre_kaydet(db, k, hesap, okunan)
+    return okunan
+
+
+@router.post("/ekstre-yukle")
+def ekstre_otomatik(dosya: UploadFile = File(...), yontem: str = "otomatik", hesap_id: int | None = None,
+                    db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Hesap seçmeden ekstre yükleme: kredi kartı ekstresi kart numarasından, hesap ekstresi dosyadaki IBAN'dan
+    bulunur. Hesap açık değilse banka adı (IBAN'dan) ve IBAN'ıyla kendiliğinden açılır. IBAN yazmayan dosyada tek
+    banka hesabı varsa ona, hiç yoksa yeni hesaba işlenir; birden fazla hesap varsa hangisi olduğu sorulur."""
+    icerik = dosyayi_oku(dosya)
+    mime = dosya_turu(dosya)
+    if hesap_id:
+        dosya.file.seek(0)
+        return ekstre_yukle(hesap_id, dosya, yontem, db, k)
+    if yontem != "ai" and kart.kart_ekstresi_mi(kart.tespit_metni(icerik, mime)):
+        okunan = kartlar.oku(icerik, mime)
+        hesap, yeni = kartlar.kart_hesabi(db, k.sirket_id, okunan.get("kart_son4"), okunan.get("banka"))
+        sonuc = kartlar.kart_ekstresi_isle(db, k, hesap, okunan, [f"Yeni kart hesabı açıldı: {hesap.ad}."] if yeni else [])
+        sonuc["yeni_hesap"] = [hesap.ad] if yeni else []
+        return sonuc
+    okunan = _banka_ekstresi_oku(db, k, icerik, mime, yontem)
+    with KAYIT_KILIDI:
+        db.expire_all()
+        hesaplar = list(db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id, BankaHesabi.tur != kartlar.KART)))
+        iban = okunan.get("iban")
+        hesap, yeni = None, False
+        if iban:
+            hesap = next((b for b in hesaplar if kural.iban_uyar(b.iban, iban)), None)
+            if hesap is None:
+                banka = kural.iban_banka(iban)
+                hesap = BankaHesabi(sirket_id=k.sirket_id, ad=f"{banka or 'Banka'} {iban[-4:]}", banka=banka, iban=iban)
+                yeni = True
+        elif len(hesaplar) == 1:
+            hesap = hesaplar[0]
+        elif not hesaplar:
+            hesap, yeni = BankaHesabi(sirket_id=k.sirket_id, ad="Banka hesabı"), True
+        else:
+            raise HTTPException(409, "Ekstrede IBAN yazmıyor; hangi hesaba ait olduğunu seçin.")
+        if yeni:
+            db.add(hesap)
+            db.flush()
+        sonuc = _ekstre_kaydet(db, k, hesap, okunan)
+        if yeni:
+            sonuc["yeni_hesap"] = [hesap.ad, *sonuc.get("yeni_hesap", [])]
+            sonuc["notlar"] = " ".join(x for x in (f"Yeni banka hesabı açıldı: {hesap.ad} (Banka Hesapları'ndan düzenlenebilir).",
+                                                     sonuc.get("notlar")) if x)
+        return sonuc
 
 
 def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) -> dict:

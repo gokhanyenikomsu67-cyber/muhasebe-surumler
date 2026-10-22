@@ -2916,10 +2916,10 @@ function ekstreYukleAc(hesapId = null) {
   sekmeAc("ekstre-yukle", "Ekstre Yükle", {
     async ciz(el) {
       const hesaplar = await api("/api/banka-hesaplari").catch(() => []);
-      // "kart": kredi kartı ekstresi; kart, ekstredeki kart numarasından bulunur, yoksa açılır.
-      const hesapS = h("select", {}, [...hesaplar.map((b) => h("option", { value: b.id, selected: b.id === hesapId },
-        `${b.ad}${b.tur === "kredi_karti" ? (b.kart_no ? " · " + b.kart_no : " · kredi kartı") : b.iban ? " · " + b.iban : ""}`)),
-        h("option", { value: "kart", selected: hesapId === "kart" || !hesaplar.length }, "Kredi kartı (kart ekstreden bulunur)")]);
+      // Otomatik: kart ekstresi kart numarasından, hesap ekstresi IBAN'dan bulunur; hesap yoksa banka adı ve IBAN'la açılır.
+      const hesapAdi = (b) => `${b.ad}${b.tur === "kredi_karti" ? (b.kart_no ? " · " + b.kart_no : " · kredi kartı") : b.iban ? " · " + b.iban : ""}`;
+      const hesapS = h("select", {}, [h("option", { value: "", selected: !hesapId || hesapId === "kart" }, "Otomatik (hesap dosyadan bulunur, yoksa açılır)"),
+        ...hesaplar.map((b) => h("option", { value: b.id, selected: b.id === hesapId }, hesapAdi(b)))]);
       const sonuc = h("div", { class: "yukleme-listesi" });
       const girdi = h("input", { type: "file", multiple: true, accept: ".xlsx,.csv,application/pdf,image/jpeg,image/png,image/webp", hidden: true,
         onchange: (e) => { yukle([...e.target.files]); e.target.value = ""; } });
@@ -2927,18 +2927,29 @@ function ekstreYukleAc(hesapId = null) {
         ondragover: (e) => { e.preventDefault(); alanEl.classList.add("uzerinde"); }, ondragleave: () => alanEl.classList.remove("uzerinde"),
         ondrop: (e) => { e.preventDefault(); alanEl.classList.remove("uzerinde"); yukle([...e.dataTransfer.files]); } },
         h("b", {}, "Banka ya da kredi kartı ekstresini buraya sürükleyin"), `Excel (.xlsx), CSV, PDF${BEN.ai_var ? " veya ekran görüntüsü" : ""}. Aynı satırlar ikinci kez eklenmez. Eski .xls dosyasını Excel'de açıp .xlsx olarak kaydedin.`);
-      async function yukle(dosyalar) {
+      async function yukle(dosyalar, hesap = null, eskiSatir = null) {
         for (const d of dosyalar) {
           const satir = h("div", {}, h("span", {}, d.name), h("span", { class: "durum" }, okunuyorYazisi()));
-          sonuc.prepend(satir);
+          if (eskiSatir) eskiSatir.replaceWith(satir); else sonuc.prepend(satir);
           const fd = new FormData(); fd.append("dosya", d);
+          const secilen = hesap ?? hesapS.value;
           try {
-            const r = await api(hesapS.value === "kart" ? "/api/kredi-karti-ekstresi"
-              : `/api/banka-hesaplari/${hesapS.value}/ekstre?yontem=${OKUMA_YONTEMI}`, { metod: "POST", dosya: fd });
+            const r = await api(secilen ? `/api/banka-hesaplari/${secilen}/ekstre?yontem=${OKUMA_YONTEMI}`
+              : `/api/ekstre-yukle?yontem=${OKUMA_YONTEMI}`, { metod: "POST", dosya: fd });
             satir.lastChild.textContent = `${r.hesap}: ${r.eklenen} yeni satır${r.atlanan ? ` · ${r.atlanan_nedeni || `${r.atlanan} atlandı`}` : ""}${r.eslesen ? `, ${r.eslesen} transfer diğer hesaptaki kayıtla eşleşti` : ""}${r.yeni_cari ? `, ${r.yeni_cari} yeni cari açıldı` : ""}${r.notlar ? " · " + r.notlar : ""}`;
             if (r.islenemeyen?.length) satir.append(h("div", { class: "hata-kutu" }, `${r.islenemeyen.length} satır işlenemedi:`, h("ul", {}, r.islenemeyen.map((x) => h("li", {}, x)))));
             if (r.eklenen) satir.append(h("button", { class: "dugme ana", onclick: taslakHareketlerAc }, "Kontrol et ve onayla"));
-          } catch (e) { satir.lastChild.textContent = "Hata: " + e.message; }
+            if (r.yeni_hesap?.length) listeyiTazele("banka-hesaplari");
+          } catch (e) {
+            satir.lastChild.textContent = "Hata: " + e.message;
+            // Dosyada IBAN yoksa ve birden fazla hesap varsa: satırda hesap seçilip "Bu hesaba yükle"
+            if (e.durum === 409 || /hangi hesaba/.test(e.message)) {
+              const guncel = await api("/api/banka-hesaplari").catch(() => hesaplar);
+              const sec = h("select", {}, guncel.map((b) => h("option", { value: b.id }, hesapAdi(b))));
+              satir.append(h("span", { class: "liste-ust", style: "margin:4px 0 0" }, sec,
+                h("button", { class: "dugme ana", onclick: () => yukle([d], sec.value, satir) }, "Bu hesaba yükle")));
+            }
+          }
         }
       }
       el.append(h("div", { class: "form-pencere" }, h("h2", {}, "Banka / Kredi Kartı Ekstresi Yükle"),
