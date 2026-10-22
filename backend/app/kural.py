@@ -47,6 +47,56 @@ def adi_bu_mu(kayit, ad: str | None) -> bool:
     return bool(anahtar) and any(ad_anahtari(x) == anahtar for x in kayit_adlari(kayit))
 
 
+def icindeki_kayit(metin: str | None, kayitlar: list):
+    """Serbest yazının içinde adı (ya da eski adı) geçen kayıt ("USTA BORDÜR ÖRNEK GES İÇİN" -> "ÖRNEK GES"
+    şantiyesi); birden çok geçiyorsa en uzun ad. 4 harften kısa adlar aranmaz."""
+    m = f" {ad_anahtari(metin)} "
+    adaylar = [(len(a), k) for k in kayitlar for x in kayit_adlari(k) if len(a := ad_anahtari(x)) >= 4 and f" {a} " in m]
+    return max(adaylar, key=lambda t: t[0])[1] if adaylar else None
+
+
+_ACIKLAMA_KELIMESI = re.compile(r"\b(icin|verildi|verilmek|alindi|odeme|odendi|odencek|odenecek|ceki|cari|ciro|edildi|kalan|"
+                                r"tutari|yazildi|isi|bankasinda|bankada|kontrol)\b")
+
+
+def santiye_ayikla(metin: str | None, santiyeler: list) -> tuple[str | None, str | None]:
+    """Excel'in Şantiye sütunundaki yazı gerçekten şantiye adı mı? (şantiye adı, açıklamaya taşınacak yazı) döner.
+    Var olan şantiye adı (ya da yazının içinde geçen var olan şantiye) şantiyedir; uzun ya da açıklama gibi yazı
+    ("RAMAZAN VİNÇ KET İÇİN VERİLDİ") şantiye açtırmaz, açıklamaya gider; kısa bilinmeyen ad yeni şantiye olur."""
+    metin = (metin or "").strip()
+    if not metin:
+        return None, None
+    if any(adi_bu_mu(st, metin) for st in santiyeler):
+        return metin, None
+    if (st := icindeki_kayit(metin, santiyeler)) is not None:
+        return st.ad, metin
+    if "|" in metin or len(ad_anahtari(metin).split()) >= 4 or _ACIKLAMA_KELIMESI.search(sade(metin)):
+        return None, metin
+    return metin, None
+
+
+_CIRO = re.compile(r"([^,|]+?)\s+firmas[ıi]na\s+ciro\s+edildi", re.I)
+_BANKA_ANAHTARLARI = [("halk", "Halkbank"), ("ziraat", "Ziraat Bankası"), ("vakif", "VakıfBank"), ("garanti", "Garanti BBVA"),
+                      ("yapi kredi", "Yapı Kredi"), ("yapikredi", "Yapı Kredi"), ("is bank", "İş Bankası"), ("isbank", "İş Bankası"),
+                      ("akbank", "Akbank"), ("teb", "TEB"), ("qnb", "QNB"), ("deniz", "DenizBank"), ("kuveyt", "Kuveyt Türk"),
+                      ("albaraka", "Albaraka Türk"), ("sekerbank", "Şekerbank"), ("ing", "ING")]
+
+
+def cek_notu_coz(metin: str | None) -> dict:
+    """Çek listesindeki not: "X firmasına ciro edildi" -> ciro edilen firma; "HALKBANKASINDA | HALKBANK ..." ya da
+    "takasa/tahsile verildi" -> çekin verildiği banka."""
+    s = sade(metin or "")
+    sonuc = {"ciro": None, "banka": None}
+    if m := _CIRO.search(metin or ""):
+        sonuc["ciro"] = " ".join(m.group(1).split()).strip(" .-")
+    elif re.search(r"bank\w*(da|ta)\b|takasa|tahsile|teminata", s):
+        for anahtar, ad in _BANKA_ANAHTARLARI:
+            if re.search(rf"\b{anahtar}", s):
+                sonuc["banka"] = ad
+                break
+    return sonuc
+
+
 def ad_degistir(kayit, yeni: str) -> None:
     """Adı değiştirir; eski ad takma ad olarak saklanır (kayıtlar kimlikle bağlı, ad yalnız görüntü)."""
     yeni = (yeni or "").strip()

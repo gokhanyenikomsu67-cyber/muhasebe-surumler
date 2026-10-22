@@ -2739,6 +2739,7 @@ function topluCekAc(yon = "alinan") {
         const fd = new FormData(); fd.append("dosya", e.target.files[0]); e.target.value = "";
         try {
           const r = await api(`/api/excel/cekler/onizle?yon=${yon}`, { metod: "POST", dosya: fd });
+          secenekler = await tumSecenekler().catch(() => secenekler);  // ciro edilen firma için açılan cariler seçicide görünsün
           ekle(r.satirlar);
           bildir(`${r.satirlar.length} çek tabloya alındı.` + (r.atlanan ? ` ${r.atlanan} satır öteki yönde (${yon === "alinan" ? "verilen" : "alınan"}) olduğu için alınmadı.` : "")
             + (r.toplam_satiri ? ` Excel'deki ${r.toplam_satiri} toplam satırı çek sayılmadı.` : ""));

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import kural, schemas
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
-from ..models import GIDER_TURLERI, Cari, Fatura, Kullanici, Santiye, Sirket
+from ..models import GIDER_TURLERI, BankaHesabi, Cari, Fatura, Kullanici, Santiye, Sirket
 from ..yukleme import dosyayi_oku
 from .cekler import cek_olustur, cekten_ekstreyi_esle
 from .faturalar import kalemleri_yaz
@@ -39,7 +39,21 @@ FATURA_ES_ANLAMLILAR = {
 }
 KDV_ORANLARI = (0, 1, 8, 10, 18, 20)
 CEK_SUTUNLARI = ["Yön (Alınan/Verilen)", "Tür (Çek/Senet)", "Çek No", "Banka", "Şube", "Hesap No", "Çeki Yazan Firma", "Tutar",
-                 "Vade", "Alış/Veriliş Tarihi", "Cari Ünvan", "Cari VKN", "Şantiye", "Açıklama"]
+                 "Vade", "Alış/Veriliş Tarihi", "Cari Ünvan", "Cari VKN", "Şantiye", "Açıklama", "Lehtar (Çekin yazıldığı firma)"]
+CEK_ES_ANLAMLILAR = {"Lehtar (Çekin yazıldığı firma)": ["Lehtar", "Çekin yazıldığı firma"], "Açıklama": ["Not", "Notlar", "Açıklama / Not"],
+                     "Çeki Yazan Firma": ["Keşideci"], "Alış/Veriliş Tarihi": ["Alış Tarihi", "Veriliş Tarihi"]}
+
+
+def _cek_santiye_aciklama(r: dict, santiyeler: list) -> tuple[str | None, str | None]:
+    """Şantiye sütunundaki yazı şantiye adı değilse açıklamaya taşınır; şantiye boşsa açıklamada geçen var olan
+    şantiye adı alınır."""
+    metin = lambda a: str(r[a]).strip() if r.get(a) not in (None, "") else None  # noqa: E731
+    santiye, ek = kural.santiye_ayikla(metin("Şantiye"), santiyeler)
+    aciklama = " | ".join(x for x in dict.fromkeys([ek, metin("Açıklama")]) if x) or None
+    # Yalnız ilk bölüme bakılır: "... | X firmasına ciro edildi" gibi sonraki notlardaki firma adı şantiye sanılmaz
+    if not santiye and aciklama and (st := kural.icindeki_kayit(aciklama.split("|")[0], santiyeler)) is not None:
+        santiye = st.ad
+    return santiye, aciklama
 
 
 def _satirlar(veri: bytes, beklenen: list[str], es_anlamlilar: dict | None = None) -> list[dict]:
@@ -219,7 +233,10 @@ async def cek_onizle(yon: str = "alinan", dosya: UploadFile = File(...), db: Ses
     """Çek şablonundaki satırları kaydetmeden toplu giriş ekranına getirir."""
     from . import cekler as cek_r
     satirlar, atlanan, toplam_satiri, excel_toplam, okunan_toplam = [], 0, 0, None, 0.0
-    for r in _satirlar(dosyayi_oku(dosya), CEK_SUTUNLARI):
+    santiyeler = list(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)))
+    hesaplar = [b for b in db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id)) if b.tur != "kredi_karti"]
+    akibetler = []
+    for r in _satirlar(dosyayi_oku(dosya), CEK_SUTUNLARI, CEK_ES_ANLAMLILAR):
         # "TOPLAM / ARA TOPLAM / GENEL TOPLAM" satırı çek değildir; tutarı okunan çeklerle karşılaştırılır
         if not r.get("Çek No") and any("toplam" in kural.sade(str(v)) for a, v in r.items() if a != "_satir"):
             toplam_satiri += 1
@@ -235,16 +252,41 @@ async def cek_onizle(yon: str = "alinan", dosya: UploadFile = File(...), db: Ses
         metin = lambda a: str(r[a]).strip() if r.get(a) not in (None, "") else None  # noqa: E731
         vade, tutar = kural.tarih_coz(r.get("Vade")), kural.para_coz(r.get("Tutar"))
         alis = kural.tarih_coz(r.get("Alış/Veriliş Tarihi"))
+        santiye, aciklama = _cek_santiye_aciklama(r, santiyeler)
+        cari_unvan, akibet = metin("Cari Ünvan"), None
+        notu = kural.cek_notu_coz(aciklama)
+        if yon == "alinan" and notu["ciro"]:
+            # "X firmasına ciro edildi": akıbet ciro; Cari sütununa ciro edilen firma yazılmışsa çeki aldığımız firma
+            # (çeki yazan) caridir
+            ciro = cek_r._cari_oner(db, k, notu["ciro"], None)
+            if ciro is None:
+                ciro = Cari(sirket_id=k.sirket_id, unvan=notu["ciro"], tur="tedarikci")
+                db.add(ciro)
+                db.flush()
+            akibet = {"islem": "ciro", "cari_id": ciro.id}
+            if cari_unvan and kural.ad_anahtari(cari_unvan) in (kural.ad_anahtari(ciro.unvan), kural.ad_anahtari(notu["ciro"])):
+                cari_unvan = None
+        elif yon == "alinan" and notu["banka"]:
+            ayni = [b for b in hesaplar if (kural.iban_banka(b.iban) or b.banka) == notu["banka"]]
+            if len(ayni) == 1:
+                akibet = {"islem": "tahsile_ver", "banka_hesap_id": ayni[0].id}
+        akibetler.append(akibet)
         satirlar.append({"tur": "senet" if kural.sade(str(r.get("Tür (Çek/Senet)", ""))).startswith("senet") else "cek",
                          "cek_no": metin("Çek No"), "banka": metin("Banka"), "sube": metin("Şube"), "hesap_no": metin("Hesap No"),
-                         "kesideci": metin("Çeki Yazan Firma") or metin("Keşideci"), "tutar": abs(tutar) if tutar else None, "vade": vade.isoformat() if vade else None,
-                         "alis_tarihi": alis.isoformat() if alis else None, "cari_unvan": metin("Cari Ünvan"),
-                         "cari_vkn": metin("Cari VKN"), "santiye_ad": metin("Şantiye"), "aciklama": metin("Açıklama"),
+                         "kesideci": metin("Çeki Yazan Firma"), "tutar": abs(tutar) if tutar else None, "vade": vade.isoformat() if vade else None,
+                         "alis_tarihi": alis.isoformat() if alis else None, "cari_unvan": cari_unvan,
+                         "cari_vkn": metin("Cari VKN"), "santiye_ad": santiye, "aciklama": aciklama,
+                         # Verilen çekte lehtar (çekin yazıldığı firma) caridir: Lehtar sütunu boşsa Cari Ünvan
+                         "lehtar": metin("Lehtar (Çekin yazıldığı firma)") or (cari_unvan if yon == "verilen" else None),
                          "belirsiz": [a for a, v in (("tutar", tutar), ("vade", vade)) if not v]})
     hazir = cek_r._okunanlari_hazirla(db, k, satirlar, None, dosya.filename or "", cekten=False)
-    for x, h in zip(satirlar, hazir):
+    for x, h, a in zip(satirlar, hazir, akibetler):
         if not x["cari_unvan"] and not x["cari_vkn"]:
             h["cari_id"], h["cari_unvan"] = None, None  # şablonda cari yazmıyorsa keşideci cari sayılmaz
+        if a:
+            h["akibet"] = a
+        h["belirsiz"] = [b for b in (h.get("belirsiz") or []) if b != "lehtar"]  # Excel'de yazılan lehtar kesindir
+    db.commit()  # ciro edilen firma için açılan cariler
     uyari = None
     if excel_toplam is not None and abs(excel_toplam - okunan_toplam) > 0.01:
         fmt = lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")  # noqa: E731
@@ -255,7 +297,7 @@ async def cek_onizle(yon: str = "alinan", dosya: UploadFile = File(...), db: Ses
 
 @router.post("/cekler/yukle")
 async def cek_yukle(dosya: UploadFile = File(...), db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
-    satirlar = _satirlar(dosyayi_oku(dosya), CEK_SUTUNLARI)
+    satirlar = _satirlar(dosyayi_oku(dosya), CEK_SUTUNLARI, CEK_ES_ANLAMLILAR)
     cariler = _Cariler(db, k)
     santiyeler = _Santiyeler(db, k)
     hatalar, eklenen = [], 0
@@ -267,12 +309,14 @@ async def cek_yukle(dosya: UploadFile = File(...), db: Session = Depends(get_db)
                 raise ValueError("vade veya tutar okunamadı")
             cari = cariler.bul(r.get("Cari Ünvan"), r.get("Cari VKN"), "musteri" if yon == "alinan" else "tedarikci")
             metin = lambda a: str(r[a]).strip() if r.get(a) not in (None, "") else None  # noqa: E731
+            santiye, aciklama = _cek_santiye_aciklama(r, santiyeler.liste)
             c = cek_olustur(db, schemas.CekGiris(
                 yon=yon, tur="senet" if kural.sade(str(r.get("Tür (Çek/Senet)", ""))).startswith("senet") else "cek",
                 cek_no=metin("Çek No"), banka=metin("Banka"), sube=metin("Şube"), hesap_no=metin("Hesap No"),
-                kesideci=metin("Çeki Yazan Firma") or metin("Keşideci"), tutar=abs(tutar), vade=vade,
+                kesideci=metin("Çeki Yazan Firma"), tutar=abs(tutar), vade=vade,
                 alis_tarihi=kural.tarih_coz(r.get("Alış/Veriliş Tarihi")), cari_id=cari.id if cari else None,
-                santiye_id=santiyeler.bul(r.get("Şantiye")), aciklama=metin("Açıklama")), k)
+                santiye_id=santiyeler.bul(santiye), aciklama=aciklama,
+                lehtar=metin("Lehtar (Çekin yazıldığı firma)") or (metin("Cari Ünvan") if yon == "verilen" else None)), k)
             cekten_ekstreyi_esle(db, c)
             eklenen += 1
         except (ValueError, HTTPException) as e:
