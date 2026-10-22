@@ -30,7 +30,7 @@ def test_red_yazisi_taninir_kelime_icindeki_red_sayilmaz():
     assert kural.red_isareti("Bu fatura alıcı tarafından iptal edilmiştir.")
     assert kural.red_isareti("RED")
     assert not kural.red_isareti("EDENRED KURUMSAL ÇÖZÜMLER\nÖdeme: Kredi Kartı\nRet süresi 8 gündür")
-    assert kural.ettn_bul("ETTN: A0EB8308-0000-4000-8000-000000000097") == "a0eb8308-0000-4000-8000-000000000097"
+    assert kural.ettn_bul("ETTN: 1A2B3C4D-0000-4000-8000-000000000005") == "1a2b3c4d-0000-4000-8000-000000000005"
     assert kural.red_yanitlari(red_yaniti("ORN1", "U-1")) == {"orn1", "u-1"}
     assert kural.red_yanitlari(red_yaniti("ORN1", "U-1", "KABUL")) == set()
     assert kural.red_yanitlari(ubl()) is None
