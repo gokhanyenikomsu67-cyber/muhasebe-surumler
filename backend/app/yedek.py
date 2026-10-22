@@ -1,7 +1,8 @@
 """Yedekleme: veritabanı ve belgeler tek .zip dosyasına alınır ve her hedef
 klasöre kopyalanır.
 
-Hedefler MUHASEBE_YEDEK_KLASORLERI ortam değişkeninde ';' ile ayrılarak verilir.
+Hedefler programdaki Yedekler ekranından seçilir (veri klasöründeki yedek-klasorleri.json); seçilmemişse
+MUHASEBE_YEDEK_KLASORLERI ortam değişkeninde ';' ile ayrılarak verilir.
 Örnek (Windows):
   C:\\MuhasebeYedek;G:\\Drive'ım\\MuhasebeYedek
 İkinci klasör Google Drive masaüstü uygulamasının eşitlediği klasör olduğunda
@@ -101,12 +102,70 @@ def yedegi_dogrula(zip_yolu: Path, klasor: Path | None = None) -> dict:
         return {"ok": False, "hata": f"Yedek açılamadı: {e}"}
 
 
+KLASOR_AYARI = VERI_KLASORU / "yedek-klasorleri.json"
+
+
+def secilen_klasorler() -> list[str] | None:
+    """Yedekler ekranından seçilen klasörler (seçilmemişse None)."""
+    try:
+        liste = json.loads(KLASOR_AYARI.read_text(encoding="utf-8"))
+        return [str(x) for x in liste if str(x).strip()] or None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def hedef_klasorler() -> list[Path]:
     deger = os.environ.get("MUHASEBE_YEDEK_KLASORLERI")
-    yollar = [Path(p.strip()) for p in deger.split(";") if p.strip()] if deger else [VERI_KLASORU / "yedekler"]
+    secilen = secilen_klasorler()
+    yollar = [Path(p) for p in secilen] if secilen else \
+        [Path(p.strip()) for p in deger.split(";") if p.strip()] if deger else [VERI_KLASORU / "yedekler"]
     for y in yollar:
-        y.mkdir(parents=True, exist_ok=True)
+        try:
+            y.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # ulaşılamayan klasör (ör. takılı olmayan disk): yedek alınırken o klasör için hata yazılır
     return yollar
+
+
+def klasorleri_sec(liste: list[str]) -> list[str]:
+    """Yedek klasörlerini kaydeder: her klasör açılabilmeli ve içine yazılabilmeli."""
+    temiz = []
+    for x in liste:
+        x = (x or "").strip()
+        if not x or x in temiz:
+            continue
+        p = Path(x)
+        if not p.is_absolute():
+            raise ValueError(f"Klasör tam yol olmalı: {x}")
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            deneme = p / ".muhasebe-yazma-denemesi"
+            deneme.write_text("x", encoding="utf-8")
+            deneme.unlink()
+        except OSError as e:
+            raise ValueError(f"Bu klasöre yazılamıyor: {x} ({e.strerror or e})") from e
+        temiz.append(str(p))
+    if not temiz:
+        raise ValueError("En az bir yedek klasörü seçin.")
+    KLASOR_AYARI.write_text(json.dumps(temiz, ensure_ascii=False, indent=1), encoding="utf-8")
+    return temiz
+
+
+def klasor_gez(yol: str | None) -> dict:
+    """Ana bilgisayardaki klasörler (yedek klasörü seçmek için): verilen klasörün alt klasörleri; boşsa başlangıç yerleri."""
+    if not yol:
+        yerler = [Path.home(), Path.home() / "Documents", Path.home() / "Desktop"]
+        if os.name == "nt":
+            yerler += [Path(f"{h}:\\") for h in "CDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{h}:\\").exists()]
+        return {"yol": "", "ust": None, "klasorler": [str(y) for y in yerler if y.is_dir()]}
+    p = Path(yol)
+    if not p.is_dir():
+        raise ValueError("Klasör bulunamadı.")
+    try:
+        alt = sorted((str(x) for x in p.iterdir() if x.is_dir() and not x.name.startswith((".", "$"))), key=str.lower)
+    except OSError:
+        alt = []
+    return {"yol": str(p), "ust": str(p.parent) if p.parent != p else "", "klasorler": alt[:500]}
 
 
 def yedek_al(koru: Path | None = None) -> dict:

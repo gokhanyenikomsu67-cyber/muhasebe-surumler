@@ -33,7 +33,10 @@ async function api(yol, { metod = "GET", veri, dosya } = {}) {
   if (dosya) ayar.body = dosya;
   else if (veri !== undefined) { ayar.body = JSON.stringify(veri); ayar.headers["Content-Type"] = "application/json"; }
   let r;
-  try { r = await fetch(yol, ayar); } catch { throw new Error("Programa ulaşılamıyor. baslat.bat penceresi açık mı? Kapandıysa yeniden açın."); }
+  try { r = await fetch(yol, ayar); } catch {
+    baglantiKoptu();
+    throw new Error("Ana bilgisayara ulaşılamıyor; kayıt yapılamadı. Yazdıklarınız ekranda duruyor, bağlantı gelince yeniden kaydedin.");
+  }
   if (r.status === 401 && yol !== "/api/giris") { cikisYap(); throw new Error("Oturum sona erdi."); }
   if (!r.ok) {
     let detay = null;
@@ -43,6 +46,32 @@ async function api(yol, { metod = "GET", veri, dosya } = {}) {
   const tur = r.headers.get("content-type") || "";
   return tur.includes("json") ? r.json() : r.blob();
 }
+
+// Ana bilgisayar (programın çalıştığı bilgisayar) kapanınca ya da ağ kopunca: kırmızı şerit çıkar, kayıt düğmeleri
+// kilitlenir (yazılanlar ekranda kalır); birkaç saniyede bir denenir, bağlantı gelince şerit kalkar.
+let baglantiDenetimi = null;
+async function sunucuAcikMi() {
+  try { return (await fetch("/web/style.css", { method: "HEAD", cache: "no-store" })).ok; } catch { return false; }
+}
+function baglantiKoptu() {
+  document.body.classList.add("baglanti-yok");
+  if (!$("#baglanti-uyari")) {
+    document.body.append(h("div", { id: "baglanti-uyari" },
+      "Ana bilgisayara ulaşılamıyor (kapalı ya da ağ bağlantısı yok). Kayıt yapılamaz; yazdıklarınız ekranda duruyor. Bağlantı gelince bu uyarı kalkar, sonra Kaydet'e basın.",
+      h("button", { type: "button", onclick: () => baglantiyiDene() }, "Şimdi dene")));
+  }
+  if (!baglantiDenetimi) baglantiDenetimi = setInterval(baglantiyiDene, 5000);
+}
+async function baglantiyiDene() {
+  if (!(await sunucuAcikMi())) return;
+  clearInterval(baglantiDenetimi);
+  baglantiDenetimi = null;
+  document.body.classList.remove("baglanti-yok");
+  $("#baglanti-uyari")?.remove();
+  bildir("Ana bilgisayara yeniden bağlanıldı; kaydedebilirsiniz.");
+}
+// Kayıt sırasında değil, önceden de fark edilsin: yarım dakikada bir sessizce denenir
+setInterval(async () => { if (TOKEN && !baglantiDenetimi && !(await sunucuAcikMi())) baglantiKoptu(); }, 30000);
 
 // Kullanıcıya ham teknik hata (JSON, İngilizce) gösterilmez: kısa Türkçe açıklama yazılır
 const ALAN_ADLARI = { banka_hesap_id: "banka hesabı", cari_id: "cari", santiye_id: "şantiye", fatura_id: "fatura", cek_id: "çek",
@@ -2245,6 +2274,63 @@ function excelIslemleriAc() {
   });
 }
 
+// Ana bilgisayardaki bir klasörü seçtirir (yedek klasörü); seçilen yol ya da null.
+function klasorSec(baslangic = "") {
+  return new Promise((coz) => {
+    const yolK = h("input", { type: "text", style: "width:100%", placeholder: "Klasör yolu, ör. D:\\MuhasebeYedek" });
+    const liste = h("ul", { class: "klasor-liste", style: "list-style:none;padding:0;max-height:320px;overflow:auto;border:1px solid #c9d3dd;margin:6px 0" });
+    const git = async (yol) => {
+      let v;
+      try { v = await api(`/api/yedekler/klasor-gez?yol=${encodeURIComponent(yol || "")}`); } catch (e) { return bildir(e.message, true); }
+      yolK.value = v.yol;
+      const satir = (ad, hedef) => h("li", { style: "padding:4px 8px;cursor:pointer", onclick: () => git(hedef) }, ad);
+      liste.replaceChildren(...(v.ust != null ? [satir("⬑ Üst klasör", v.ust)] : []),
+        ...v.klasorler.map((k) => satir(`📁 ${v.yol ? k.split(/[\\/]/).pop() : k}`, k)),
+        ...(v.klasorler.length ? [] : [h("li", { style: "padding:4px 8px;color:#4a5866" }, "Alt klasör yok")]));
+    };
+    const d = h("dialog", { class: "secim-penceresi", style: "min-width:520px" }, h("h3", {}, "Yedek klasörü seçin"),
+      h("p", { class: "ipucu" }, "Bunlar ana bilgisayardaki klasörlerdir. Google Drive klasörünü seçerseniz yedek Drive'a da gider. Yolu elle de yazabilirsiniz; klasör yoksa açılır."),
+      yolK, liste,
+      h("div", { class: "dugmeler" },
+        h("button", { type: "button", class: "dugme ana", onclick: () => { if (!yolK.value.trim()) return bildir("Bir klasör seçin.", true); d.close(); coz(yolK.value.trim()); } }, "Bu klasörü seç"),
+        h("button", { type: "button", class: "dugme", onclick: () => { d.close(); coz(null); } }, "Vazgeç")));
+    d.addEventListener("cancel", () => coz(null));
+    d.addEventListener("close", () => setTimeout(() => d.remove(), 0));
+    document.body.append(d);
+    d.showModal();
+    git(baslangic);
+  });
+}
+
+async function yedekKlasorleriAc() {
+  let v;
+  try { v = await api("/api/yedekler/klasorler"); } catch (e) { return bildir(e.message, true); }
+  const klasorler = [...v.klasorler];
+  const liste = h("ul", {});
+  const ciz = () => liste.replaceChildren(...klasorler.map((k, i) => h("li", {}, k, " ",
+    klasorler.length > 1 ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); klasorler.splice(i, 1); ciz(); } }, "Kaldır") : "")));
+  ciz();
+  const d = h("dialog", { class: "secim-penceresi" }, h("h3", {}, "Yedek klasörleri"),
+    h("p", {}, "Her yedek bu klasörlerin hepsine alınır (ana bilgisayarda):"), liste,
+    h("div", { class: "dugmeler" },
+      h("button", { type: "button", class: "dugme", onclick: async () => {
+        const k = await klasorSec();
+        if (k && !klasorler.includes(k)) { klasorler.push(k); ciz(); }
+      } }, "+ Klasör ekle"),
+      h("button", { type: "button", class: "dugme ana", onclick: async () => {
+        try {
+          await api("/api/yedekler/klasorler", { metod: "PUT", veri: { klasorler } });
+          d.close();
+          bildir("Yedek klasörleri kaydedildi. Bir sonraki yedek bu klasörlere alınır.");
+          listeyiTazele("yedekler");
+        } catch (e) { bildir(e.message, true); }
+      } }, "Kaydet"),
+      h("button", { type: "button", class: "dugme", onclick: () => d.close() }, "Vazgeç")));
+  d.addEventListener("close", () => setTimeout(() => d.remove(), 0));
+  document.body.append(d);
+  d.showModal();
+}
+
 function yedeklerAc() {
   sekmeAc("yedekler", "Yedekler", listeEkrani({
     baslik: "Yedekler",
@@ -2258,6 +2344,7 @@ function yedeklerAc() {
           bildir(r.ok ? `Son yedek (${r.dosya}) açılıp denendi: sorunsuz.` : `Son yedek açılamadı: ${r.hata}`, !r.ok);
         } catch (e) { bildir(e.message, true); }
       } }, "Son yedeği dene"),
+      BEN.rol === "sahip" ? h("button", { class: "dugme", onclick: () => yedekKlasorleriAc() }, "Yedek klasörleri") : "",
       h("span", { class: "ipucu" }, "Bir yedeğe dönmek için satırı seçip \"Bu yedeğe dön\" deyin. En yeni 3 yedek saklanır, eskiler kendiliğinden silinir. Belgeler (PDF, resim) yedek klasöründe bir kez durur, her yedekte yeniden kopyalanmaz.")),
     toplu: BEN.rol === "sahip" ? [{ ad: "Bu yedeğe dön", tehlikeli: true, islem: async (sec) => {
       if (sec.length !== 1) { bildir("Dönülecek tek bir yedek seçin.", true); return false; }
@@ -2408,6 +2495,10 @@ async function guncellemeleriDenetle() {
 
 // ---------------------------------------------------------------- gösterge paneli
 async function gostergePaneli(el) {
+  if (!yetkiVar("rapor")) {
+    el.append(h("h2", {}, `Hoş geldiniz, ${BEN.ad}`), h("p", {}, "Yetkili olduğunuz bölümler soldaki menüde."));
+    return;
+  }
   let o, y;
   try { [o, y] = await Promise.all([api("/api/raporlar/ozet"), api("/api/raporlar/yaslandirma")]); } catch (e) { return bildir(e.message, true); }
   const gecen = (tur) => y.acik_faturalar.filter((x) => x.tur === tur && x.gecen_gun > 0).reduce((t, x) => t + x.acik_tutar, 0);
@@ -3795,6 +3886,53 @@ function firmaBilgileriAc() {
   });
 }
 
+// Kişinin bölüm yetkileri: her bölüm için Görür / Girer / Düzenler / Siler ayrı ayrı işaretlenir.
+// Seçilen yetkiler döner; vazgeçilirse null.
+function yetkiPenceresi(baslik, v, yetkiler) {
+  return new Promise((coz) => {
+    const kutular = {};
+    const satirlar = Object.entries(v.bolumler).map(([b, ad]) => h("tr", {}, h("td", {}, ad),
+      ...Object.keys(v.duzeyler).map((d) => {
+        const k = h("input", { type: "checkbox", checked: !!yetkiler?.[b]?.includes(d), onchange: (e) => {
+          // Giren, düzenleyen ya da silen görür de; görmeyen hiçbir şey yapamaz
+          if (e.target.checked && d !== "gor") kutular[`${b}|gor`].checked = true;
+          if (!e.target.checked && d === "gor") Object.keys(v.duzeyler).forEach((x) => (kutular[`${b}|${x}`].checked = false));
+        } });
+        kutular[`${b}|${d}`] = k;
+        return h("td", {}, k);
+      })));
+    const hepsi = (fn) => Object.entries(kutular).forEach(([a, k]) => (k.checked = fn(a.split("|")[1])));
+    const d = h("dialog", { class: "secim-penceresi" }, h("h3", {}, baslik),
+      h("table", { class: "yetki-tablo" }, h("thead", {}, h("tr", {}, h("th", {}, "Bölüm"), ...Object.values(v.duzeyler).map((x) => h("th", {}, x.split(" (")[0])))),
+        h("tbody", {}, satirlar)),
+      h("p", { class: "ipucu" }, "Girer: yeni kayıt, belge okuma ve onay. Fatura, çek ya da banka girebilen, girerken yeni cari ve şantiye de açabilir."),
+      h("div", { class: "dugmeler" },
+        h("button", { type: "button", class: "dugme", onclick: () => hepsi(() => true) }, "Hepsi"),
+        h("button", { type: "button", class: "dugme", onclick: () => hepsi((x) => x === "gor") }, "Yalnız görüntüleme"),
+        h("button", { type: "button", class: "dugme", onclick: () => hepsi(() => false) }, "Hiçbiri"),
+        h("button", { type: "button", class: "dugme ana", onclick: () => {
+          const y = {};
+          for (const b of Object.keys(v.bolumler)) y[b] = Object.keys(v.duzeyler).filter((x) => kutular[`${b}|${x}`].checked);
+          d.close(); coz(y);
+        } }, "Kaydet"),
+        h("button", { type: "button", class: "dugme", onclick: () => { d.close(); coz(null); } }, "Vazgeç")));
+    d.addEventListener("cancel", () => coz(null));
+    d.addEventListener("close", () => setTimeout(() => d.remove(), 0));
+    document.body.append(d);
+    d.showModal();
+  });
+}
+
+function yetkiOzeti(v, x) {
+  if (x.rol === "sahip") return "Her şey (sahip)";
+  const parca = Object.entries(v.bolumler).map(([b, ad]) => {
+    const d = x.yetkiler[b] || [];
+    if (!d.length) return null;
+    return `${ad}: ${d.length === 4 ? "tam" : d.map((y) => v.duzeyler[y].split(" (")[0].toLocaleLowerCase("tr")).join(", ")}`;
+  }).filter(Boolean);
+  return parca.length ? parca.join(" · ") : "Hiçbir bölüm yok";
+}
+
 function kullanicilarAc() {
   sekmeAc("kullanicilar", "Kullanıcılar", {
     async ciz(el) {
@@ -3803,27 +3941,53 @@ function kullanicilarAc() {
       const sahipMi = BEN.rol === "sahip";
       const islem = async (fn, mesaj) => { try { await fn(); bildir(mesaj); yenidenCiz(); } catch (e) { bildir(e.message, true); } };
       const satirlar = v.kullanicilar.map((x) => h("tr", {}, h("td", {}, x.ad, x.ben ? " (siz)" : ""), h("td", {}, x.eposta),
-        h("td", {}, h("select", { disabled: !sahipMi || x.ben, onchange: (e) => islem(() => api(`/api/kullanicilar/${x.id}`, { metod: "PUT", veri: { rol: e.target.value } }), "Yetki değiştirildi.") },
-          Object.entries(v.roller).map(([d, m]) => h("option", { value: d, selected: d === x.rol }, m)))),
-        h("td", {}, sahipMi ? h("button", { class: "dugme", onclick: () => {
+        h("td", { style: "white-space:normal;max-width:520px" }, yetkiOzeti(v, x)),
+        h("td", {}, sahipMi && x.rol !== "sahip" ? h("button", { class: "dugme ana", onclick: async () => {
+          const y = await yetkiPenceresi(`${x.ad} — yetkiler`, v, x.yetkiler);
+          if (y) islem(() => api(`/api/kullanicilar/${x.id}`, { metod: "PUT", veri: { yetkiler: y } }), "Yetkiler kaydedildi.");
+        } }, "Yetkileri düzenle") : null,
+        sahipMi && !x.ben ? h("button", { class: "dugme", onclick: () => {
+          const sahipYap = x.rol !== "sahip";
+          if (confirm(sahipYap ? `${x.ad} sahip yapılsın mı? Sahip her şeyi yapar, kullanıcı ekler ve yedeğe döner.` : `${x.ad} sahiplikten çıkarılsın mı? Bütün bölümlerde tam yetkili üye olur.`))
+            islem(() => api(`/api/kullanicilar/${x.id}`, { metod: "PUT", veri: sahipYap ? { rol: "sahip" } : { yetkiler: Object.fromEntries(Object.keys(v.bolumler).map((b) => [b, Object.keys(v.duzeyler)])) } }),
+              sahipYap ? `${x.ad} sahip yapıldı.` : `${x.ad} sahiplikten çıkarıldı.`);
+        } }, x.rol === "sahip" ? "Sahiplikten çıkar" : "Sahip yap") : null,
+        sahipMi ? h("button", { class: "dugme", onclick: () => {
           const sifre = prompt(`${x.ad} için yeni şifre (en az 6 karakter):`);
           if (sifre) islem(() => api(`/api/kullanicilar/${x.id}`, { metod: "PUT", veri: { sifre } }), "Şifre değiştirildi.");
         } }, "Şifre değiştir") : null,
         sahipMi && !x.ben ? h("button", { class: "dugme tehlike", onclick: () => confirm(`${x.ad} silinsin mi?`) &&
           islem(() => api(`/api/kullanicilar/${x.id}`, { metod: "DELETE" }), "Kullanıcı silindi.") }, "Sil") : null)));
-      const form = h("form", { class: "liste-ust", onsubmit: (e) => {
+      const form = h("form", { class: "liste-ust", onsubmit: async (e) => {
         e.preventDefault();
-        islem(() => api("/api/kullanicilar", { metod: "POST", veri: formVerisi(form) }), "Kullanıcı eklendi.");
+        const veri = formVerisi(form);
+        const y = await yetkiPenceresi(`${veri.ad} — yetkiler`, v, {});
+        if (!y) return;
+        islem(() => api("/api/kullanicilar", { metod: "POST", veri: { ...veri, rol: "uye", yetkiler: y } }), "Kullanıcı eklendi.");
       } }, h("b", {}, "Yeni kullanıcı:"), h("input", { name: "ad", placeholder: "Ad", required: true }),
         h("input", { name: "eposta", type: "email", placeholder: "E-posta", required: true }),
         h("input", { name: "sifre", type: "password", placeholder: "Şifre (en az 6)", required: true, minlength: 6 }),
-        h("select", { name: "rol" }, Object.entries(v.roller).filter(([d]) => d !== "sahip").concat([["sahip", v.roller.sahip]])
-          .map(([d, m]) => h("option", { value: d }, m))), h("button", { class: "dugme ana" }, "Ekle"));
-      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Kullanıcılar ve Yetkiler")),
+        h("button", { class: "dugme ana" }, "Ekle ve yetkilerini seç"));
+      let ag = null;
+      try { ag = (await api("/api/sistem-durumu")).ag; } catch { /* satır gösterilmez */ }
+      const agSatiri = ag && sahipMi ? h("div", { class: "uyari-satiri" },
+        h("b", {}, `Öteki bilgisayarlardan erişim: ${ag.acik ? "Açık" : "Kapalı"}`),
+        ag.acik ? h("span", {}, "Ofisteki bilgisayarlar tarayıcıya şu adreslerden birini yazar: ", h("b", {}, ag.adresler.join("  ·  "))) :
+          h("span", {}, "Açınca ofisteki öteki bilgisayarlar bu bilgisayardaki programa tarayıcıdan bağlanır."),
+        h("button", { class: "dugme", onclick: async () => {
+          if (!confirm(ag.acik ? "Öteki bilgisayarlardan erişim kapatılsın mı? Program yeniden açılacak." :
+            "Ofisteki öteki bilgisayarlardan erişim açılsın mı? Program yeniden açılacak. Windows izin sorarsa \"İzin ver\" deyin.")) return;
+          try {
+            await api("/api/sistem/ag-modu", { metod: "POST", veri: { acik: !ag.acik } });
+            bildir("Program yeniden açılıyor; birkaç saniye sonra sayfa yenilenecek.");
+            setTimeout(() => location.reload(), 12000);
+          } catch (e) { bildir(e.message, true); }
+        } }, ag.acik ? "Kapat" : "Aç")) : "";
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Kullanıcılar ve Yetkiler")), agSatiri,
         h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
-          h("thead", {}, h("tr", {}, ["Ad", "E-posta", "Yetki", ""].map((b) => h("th", {}, b)))), h("tbody", {}, satirlar))),
+          h("thead", {}, h("tr", {}, ["Ad", "E-posta", "Yetkiler", ""].map((b) => h("th", {}, b)))), h("tbody", {}, satirlar))),
         sahipMi ? form : h("p", {}, "Kullanıcı eklemeyi yalnız şirket sahibi yapabilir."),
-        ACIKLAMA("Muhasebeci kayıt girer ve onaylar; izleyici yalnız görür ve rapor alır; sahip ayrıca kullanıcıları ve firma bilgilerini yönetir. Eklenen kişi aynı bilgisayardaki programa kendi e-posta ve şifresiyle girer."));
+        ACIKLAMA("Her kişiye bölüm bölüm Görür / Girer / Düzenler / Siler yetkisi verin. Yetkisi olmayan bölüm o kişinin menüsünde görünmez. Sahip her şeyi yapar, kullanıcı ekler ve yedeğe döner. Ofisteki öteki bilgisayarlardan programa ana bilgisayarın adresiyle, kendi e-posta ve şifresiyle girilir."));
     },
     yenile: () => yenidenCiz(),
   });
@@ -4100,7 +4264,7 @@ const VADE_HATIRLATMA_MS = 60 * 60 * 1000;
 let vadeZamanlayici = null;
 function vadeOncedenGun() { try { return Number(localStorage.getItem("vade_onceden_gun")) || 0; } catch { return 0; } }
 async function vadeBildirimiKontrol(pencere = true, hepsi = false) {
-  if (!TOKEN) return;
+  if (!TOKEN || !yetkiVar("cek")) return;
   let liste = [];
   try { liste = await api(`/api/cekler/vadesi-gelen?gun=${vadeOncedenGun()}`); } catch { return; }
   const yazi = $("#vade-uyari");
@@ -4195,10 +4359,23 @@ const MODULLER = [
   ["Araçlar", [["Excel İşlemleri", excelIslemleriAc], ["Yedekler", yedeklerAc], ["Firma Bilgileri", firmaBilgileriAc], ["Kullanıcılar", kullanicilarAc], ["Değişiklik Geçmişi", () => gecmisAc()],
     ["Güncellemeleri Denetle", guncellemeleriDenetle], ["Verileri Sıfırla", verileriSifirla]]],
 ];
+// Kullanıcının bölüm yetkisi (sunucu da denetler; burada yalnız menü ve düğmeler süzülür)
+const yetkiVar = (bolum, duzey = "gor") => !bolum || BEN?.rol === "sahip" || !!BEN?.yetkiler?.[bolum]?.includes(duzey);
+const GRUP_BOLUMU = { "Fatura": "fatura", "Malzeme": "malzeme", "Cari": "cari", "Şantiye": "santiye", "Çek / Senet": "cek",
+  "Banka / Kasa": "banka", "Mali Raporlar": "rapor" };
+const MENU_BOLUMU = { "Ödeme Takvimi / Nakit Akışı": "banka", "Düzenli Ödemeler": "banka", "Taşeron Hesabı": "santiye", "Mutabakat": "cari",
+  "Yedekler": "araclar", "Değişiklik Geçmişi": "araclar", "Hızlı Arama (F3)": null, "Excel İşlemleri": null, "Firma Bilgileri": null,
+  "Kullanıcılar": null, "Güncellemeleri Denetle": null, "Verileri Sıfırla": "sahip" };
+function menuGorunur(grup, ad) {
+  const b = ad in MENU_BOLUMU ? MENU_BOLUMU[ad] : GRUP_BOLUMU[grup];
+  return b === "sahip" ? BEN.rol === "sahip" : yetkiVar(b);
+}
 function modulPaneliCiz() {
   $("#modul-paneli").replaceChildren(...MODULLER.map(([grup, ogeler]) => {
+    const gorunen = ogeler.filter(([ad]) => menuGorunur(grup, ad));
+    if (!gorunen.length) return "";
     const g = h("div", { class: "modul-grup" }, h("div", { onclick: () => g.classList.toggle("kapali") }, grup),
-      h("ul", {}, ogeler.map(([ad, fn]) => h("li", { class: fn ? "" : "yakinda", onclick: fn ? () => fn() : null }, ad))));
+      h("ul", {}, gorunen.map(([ad, fn]) => h("li", { class: fn ? "" : "yakinda", onclick: fn ? () => fn() : null }, ad))));
     return g;
   }));
 }

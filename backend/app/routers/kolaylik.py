@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import schemas
+from .. import schemas, yetki
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
 from ..hesap import banka_bakiyeleri, kasa_bakiyesi
@@ -67,7 +67,10 @@ def hizli_ara(q: str = "", db: Session = Depends(get_db), k: Kullanici = Depends
         if icinde(c.cek_no, c.kesideci, c.cari.unvan if c.cari else None) or ayni_tutar(c.tutar):
             sonuc["cekler"].append({"id": c.id, "cek_no": c.cek_no, "yon": c.yon, "vade": c.vade, "tutar": float(c.tutar),
                                     "cari": c.cari.unvan if c.cari else c.kesideci})
-    return {ad: liste[:sinir] for ad, liste in sonuc.items()}
+    # Yalnız görme yetkisi olan bölümlerin sonuçları
+    yetkiler = yetki.yetkileri(k)
+    bolum = {"cariler": "cari", "faturalar": "fatura", "santiyeler": "santiye", "cekler": "cek"}
+    return {ad: (liste[:sinir] if "gor" in yetkiler[bolum[ad]] else []) for ad, liste in sonuc.items()}
 
 
 # --- Düzenli ödemeler --------------------------------------------------------

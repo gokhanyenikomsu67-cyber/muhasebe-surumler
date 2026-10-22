@@ -77,14 +77,17 @@ API anahtarı gerekmez: XML, PDF, fotoğraf, Excel ve ekstreler bu bilgisayarda 
 
 Siyah pencere açık kaldığı sürece program çalışır; kapatınca program da kapanır. Ayarlar `.env` dosyasındadır (Not Defteri ile açılabilir). Yedekler varsayılan olarak `Belgeler\MuhasebeYedek` klasörüne alınır.
 
-**Başka bilgisayarlardan erişim:** `.env` dosyasına `MUHASEBE_AG=1` satırını ekleyip programı yeniden açın; aynı ağdaki bilgisayarlar `http://<bu-bilgisayarın-ip-adresi>:8000` adresinden girer. Bu modda:
-- her işlem için giriş zorunludur; oturum 30 gün sonra kapanır, 5 hatalı şifre denemesinde o bilgisayardan giriş 10 dakika kapanır;
-- yeni şirket hesabı yalnız programın kurulu olduğu bilgisayardan açılır; diğer kişileri Araçlar > Kullanıcılar'dan siz eklersiniz (izleyici yalnız görür, hiçbir şeyi değiştiremez);
-- her firma yalnız kendi kayıtlarını görür. Programı internete (modem port yönlendirme) açmayın; yalnız kendi yerel ağınızda kullanın.
+**Ofisteki ve evdeki bilgisayarlardan erişim (tek veri, tek yedek):** program yalnız ana bilgisayarda çalışır; öteki bilgisayarlar tarayıcıdan bağlanır, kendi bilgisayarlarına kurulum gerekmez.
+1. Ana bilgisayarda Araçlar > Kullanıcılar > "Öteki bilgisayarlardan erişim" satırında **Aç**'a basın (Windows izin sorarsa "İzin ver"). Aynı satır bağlanma adreslerini gösterir (ör. `http://ANABILGISAYAR:8000`).
+2. Ana bilgisayarın uyku ayarını "Hiçbir zaman" yapın; kapalıyken öteki bilgisayarlarda kırmızı uyarı çıkar ve kayıt yapılamaz (yazılanlar ekranda kalır).
+3. Evden ya da dışarıdan bağlanmak için ana bilgisayara ve dışarıdaki bilgisayara ücretsiz [Tailscale](https://tailscale.com/download) kurun, ikisinde de aynı hesapla girin; adres `http://<ana bilgisayarın Tailscale adı>:8000` olur. Programı modemden internete açmayın.
+4. Kişileri Araçlar > Kullanıcılar'dan ekleyin; her kişiye bölüm bölüm Görür / Girer / Düzenler / Siler yetkisi verin.
+
+Bu modda her işlem için giriş zorunludur; oturum 30 gün sonra kapanır, 5 hatalı şifre denemesinde o bilgisayardan giriş 10 dakika kapanır; yeni şirket hesabı yalnız ana bilgisayardan açılır; her firma yalnız kendi kayıtlarını görür.
 
 ### Google Drive yedeği
 
-[Google Drive masaüstü uygulamasını](https://www.google.com/drive/download/) kurun. `.env` içindeki `MUHASEBE_YEDEK_KLASORLERI` satırına Drive klasörünüzü ekleyin (ör. `C:\MuhasebeYedek;G:\My Drive\MuhasebeYedek`). Yedekler hem bilgisayara hem Drive'a gider.
+[Google Drive masaüstü uygulamasını](https://www.google.com/drive/download/) kurun. Araçlar > Yedekler > "Yedek klasörleri"nden Drive klasörünüzü ekleyin. Yedekler seçilen bütün klasörlere gider.
 
 ## Geliştirici notları
 

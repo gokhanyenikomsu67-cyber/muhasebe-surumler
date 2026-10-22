@@ -140,6 +140,7 @@ EKLENEN_SUTUNLAR = [
     ("fatura_kalemleri", "depo_id", "INTEGER REFERENCES depolar(id)"),
     ("santiyeler", "eski_adlar", "TEXT"),
     ("depolar", "eski_adlar", "TEXT"),
+    ("kullanicilar", "yetkiler", "JSON"),
 ]
 
 
@@ -164,6 +165,7 @@ SEMA_ADIMLARI = [
     (2, "Faturalara stopaj sütunları eklenir", _sutunlari_ekle),
     (3, "Fatura kalemlerine depo sütunu eklenir", _sutunlari_ekle),
     (4, "Şantiye ve depolara eski adlar sütunu eklenir", _sutunlari_ekle),
+    (5, "Kullanıcılara bölüm yetkileri sütunu eklenir", _sutunlari_ekle),
 ]
 SEMA_YEDEK_KLASORU = VERI_KLASORU / "guncelleme-yedekleri"
 

@@ -261,3 +261,13 @@ table.liste tr.tiklanir { cursor: pointer; }
 .cari-durum { font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .cari-kayitli { color: var(--yesil); }
 .cari-yeni { background: var(--uyari); padding: 0 4px; border-radius: 3px; }
+
+/* Ana bilgisayara ulaşılamıyor: kırmızı şerit, kayıt düğmeleri kilitli (yazılanlar ekranda kalır) */
+#baglanti-uyari { position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: #b3261e; color: #fff; padding: 10px 14px;
+  font-weight: 600; display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+#baglanti-uyari button { background: #fff; color: #b3261e; border: 0; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-weight: 600; }
+body.baglanti-yok .dugme, body.baglanti-yok #arac-cubugu button, body.baglanti-yok dialog button { pointer-events: none; opacity: .45; }
+/* Kullanıcı yetki tablosu */
+table.yetki-tablo { border-collapse: collapse; margin: 8px 0; }
+table.yetki-tablo th, table.yetki-tablo td { border: 1px solid var(--cizgi, #c9d3dd); padding: 4px 10px; text-align: center; }
+table.yetki-tablo td:first-child, table.yetki-tablo th:first-child { text-align: left; }

@@ -123,3 +123,18 @@ def test_en_eski_yedege_donulebilir_dondukten_once_alinan_yedek_onu_silmez(tmp_p
     assert (tmp_path / "y" / ilk).exists()
     # Bulunamayan yedek için anlaşılır mesaj
     assert "bulunamadı" in yedek.yedegi_dogrula(tmp_path / "y" / "muhasebe-yedek-20200101-000000.zip")["hata"]
+
+
+def test_yedek_klasoru_ekrandan_secilir(tmp_path, monkeypatch):
+    monkeypatch.setattr(yedek, "KLASOR_AYARI", tmp_path / "yedek-klasorleri.json")
+    monkeypatch.setenv("MUHASEBE_YEDEK_KLASORLERI", str(tmp_path / "ortam"))
+    h = yeni_kullanici(f"{uuid.uuid4().hex}@ornek.com")
+    assert client.get("/api/yedekler/klasorler", headers=h).json() == {"klasorler": [str(tmp_path / "ortam")], "secildi": False}
+    a, b = tmp_path / "ana", tmp_path / "drive"
+    r = client.put("/api/yedekler/klasorler", json={"klasorler": [str(a), str(b), str(a)]}, headers=h)
+    assert r.status_code == 200 and r.json()["klasorler"] == [str(a), str(b)]
+    assert client.put("/api/yedekler/klasorler", json={"klasorler": ["goreli/yol"]}, headers=h).status_code == 422
+    yeni = client.post("/api/yedekler", headers=h).json()
+    assert (a / yeni["dosya"]).exists() and (b / yeni["dosya"]).exists()
+    gez = client.get(f"/api/yedekler/klasor-gez?yol={tmp_path}", headers=h).json()
+    assert str(a) in gez["klasorler"] and gez["ust"] == str(tmp_path.parent)

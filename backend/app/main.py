@@ -76,6 +76,36 @@ def yedek_olustur(k: Kullanici = Depends(aktif_kullanici)):
         raise HTTPException(500, f"Yedek alınamadı: {e}") from e
 
 
+class YedekKlasorleri(BaseModel):
+    klasorler: list[str]
+
+
+@app.get("/api/yedekler/klasorler")
+def yedek_klasorleri(k: Kullanici = Depends(aktif_kullanici)):
+    return {"klasorler": [str(x) for x in yedek.hedef_klasorler()], "secildi": yedek.secilen_klasorler() is not None}
+
+
+@app.put("/api/yedekler/klasorler")
+def yedek_klasorlerini_sec(istek: YedekKlasorleri, k: Kullanici = Depends(aktif_kullanici)):
+    """Yedeklerin alınacağı klasörler (ana bilgisayarda); yalnız sahip seçer."""
+    if k.rol != "sahip":
+        raise HTTPException(403, "Yedek klasörünü sadece sahip seçebilir.")
+    try:
+        return {"klasorler": yedek.klasorleri_sec(istek.klasorler)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/yedekler/klasor-gez")
+def yedek_klasor_gez(yol: str = "", k: Kullanici = Depends(aktif_kullanici)):
+    if k.rol != "sahip":
+        raise HTTPException(403, "Yedek klasörünü sadece sahip seçebilir.")
+    try:
+        return yedek.klasor_gez(yol)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+
 class GeriYukleme(BaseModel):
     klasor: str
     dosya: str
@@ -182,7 +212,46 @@ def sistem_durumu(k: Kullanici = Depends(aktif_kullanici)):
     return {"ocr_var": ocr.var_mi(), "ocr_kurulum": _KURULUM, "kurulabilir": os.name == "nt", "ek_paket_hatasi": ek_hata,
             "ek_paketler": ek_paketler(), "ek_kurulum": _ek_kurulum_durumu(),
             "son_yedek": d.get("son_yedek"), "son_deneme": d.get("son_deneme"), "guncelleme": _guncelleme_durumu(),
-            "disk": _disk_durumu()}
+            "disk": _disk_durumu(), "ag": _ag_durumu()}
+
+
+def _ag_durumu() -> dict:
+    """Öteki bilgisayarlardan erişim açık mı ve bu (ana) bilgisayarın adresleri."""
+    import socket
+    ad = socket.gethostname()
+    ipler = set()
+    try:
+        for bilgi in socket.getaddrinfo(ad, None, socket.AF_INET):
+            ipler.add(bilgi[4][0])
+    except OSError:
+        pass
+    ipler.discard("127.0.0.1")
+    return {"acik": os.environ.get("MUHASEBE_AG") == "1", "bilgisayar": ad,
+            "adresler": [f"http://{x}:8000" for x in [ad, *sorted(ipler)]]}
+
+
+class AgModu(BaseModel):
+    acik: bool
+
+
+@app.post("/api/sistem/ag-modu")
+def ag_modu(istek: AgModu, k: Kullanici = Depends(yazabilir)):
+    """Ofisteki öteki bilgisayarlardan erişimi açar/kapatır: .env'e MUHASEBE_AG yazılır, program yeniden açılır."""
+    if k.rol != "sahip":
+        raise HTTPException(403, "Bunu sadece sahip yapabilir.")
+    kok = Path(__file__).resolve().parents[2]
+    bat, env = kok / "baslat.bat", kok / ".env"
+    if os.name != "nt" or not bat.exists():
+        raise HTTPException(400, "Bu ayar yalnız Windows'ta, baslat.bat ile açılan programda ekrandan yapılır.")
+    try:
+        # Bayt olarak: dosyadaki öteki satırların kodlaması (Windows'ta ANSI olabilir) bozulmasın
+        satirlar = env.read_bytes().splitlines() if env.exists() else []
+        satirlar = [x for x in satirlar if not x.strip().startswith(b"MUHASEBE_AG=")] + [b"MUHASEBE_AG=" + (b"1" if istek.acik else b"0")]
+        env.write_bytes(b"\r\n".join(satirlar) + b"\r\n")
+    except OSError as e:
+        raise HTTPException(500, f"Ayar yazılamadı: {e}") from e
+    threading.Thread(target=_yeniden_baslat, args=(bat,), daemon=True).start()
+    return {"acik": istek.acik, "yeniden_baslatiliyor": True}
 
 
 def _disk_durumu() -> dict | None:

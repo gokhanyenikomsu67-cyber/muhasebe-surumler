@@ -31,7 +31,9 @@ class Kullanici(Base):
     ad: Mapped[str] = mapped_column(String(255))
     sifre_hash: Mapped[str] = mapped_column(String(255))
     sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"))
-    rol: Mapped[str] = mapped_column(String(20), default="sahip")  # sahip | muhasebeci | izleyici
+    rol: Mapped[str] = mapped_column(String(20), default="sahip")  # sahip | muhasebeci | izleyici | uye
+    # Bölüm yetkileri (yetki.py): {"fatura": ["gor", "ekle"], ...}; boşsa rolün varsayılanı
+    yetkiler: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     sirket: Mapped[Sirket] = relationship()
 
 

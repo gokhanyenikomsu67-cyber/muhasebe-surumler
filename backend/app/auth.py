@@ -5,9 +5,10 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from . import yetki
 from .db import get_db
 from .models import Kullanici, Oturum
 
@@ -34,7 +35,7 @@ def oturum_ac(db: Session, kullanici: Kullanici) -> str:
     return token
 
 
-def aktif_kullanici(authorization: str = Header(default=""), db: Session = Depends(get_db)) -> Kullanici:
+def aktif_kullanici(request: Request, authorization: str = Header(default=""), db: Session = Depends(get_db)) -> Kullanici:
     token = authorization.removeprefix("Bearer ").strip()
     oturum = db.get(Oturum, token) if token else None
     if oturum and oturum.olusturma and datetime.utcnow() - oturum.olusturma > OTURUM_SURESI:
@@ -44,10 +45,11 @@ def aktif_kullanici(authorization: str = Header(default=""), db: Session = Depen
     if not oturum:
         raise HTTPException(401, "Giriş yapmanız gerekiyor.")
     db.info["kullanici_id"] = oturum.kullanici_id  # değişiklik geçmişinde "kim"
+    yetki.denetle(oturum.kullanici, request.method, request.url.path)  # bölüm yetkisi (sahip her şeyi yapar)
     return oturum.kullanici
 
 
 def yazabilir(k: Kullanici = Depends(aktif_kullanici)) -> Kullanici:
-    if k.rol == "izleyici":
+    if k.rol == "izleyici" and k.yetkiler is None:
         raise HTTPException(403, "Bu işlem için yetkiniz yok.")
     return k

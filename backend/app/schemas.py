@@ -35,6 +35,7 @@ class KullaniciGiris(BaseModel):
     eposta: str
     sifre: str
     rol: str = "muhasebeci"
+    yetkiler: dict[str, list[str]] | None = None
 
 
 class CariGiris(BaseModel):

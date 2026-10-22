@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from .. import ai, kural, ocr, schemas
+from .. import ai, kural, ocr, schemas, yetki
 from ..auth import aktif_kullanici, oturum_ac, sifre_dogru, sifre_hashle, yazabilir
 from ..db import get_db
 from ..surum import SURUM
@@ -68,6 +68,7 @@ def giris(istek: schemas.GirisIstegi, request: Request, db: Session = Depends(ge
 @router.get("/ben")
 def ben(k: Kullanici = Depends(aktif_kullanici)):
     return {"ad": k.ad, "eposta": k.eposta, "rol": k.rol, "sirket": k.sirket.unvan, "gider_turleri": GIDER_TURLERI,
+            "yetkiler": yetki.yetkileri(k),
             "ai_var": ai.anahtar_var(),
             "ocr_var": ocr.var_mi(), "surum": SURUM,
             "tevkifat_kodlari": [{"kod": kod, "oran": oran, "aciklama": ac} for kod, (oran, ac) in kural.TEVKIFAT_KODLARI.items()]}
@@ -253,7 +254,8 @@ def santiye_sil(santiye_id: int, db: Session = Depends(get_db), k: Kullanici = D
 # --- Firma bilgileri ve kullanıcılar ---------------------------------------
 
 SIRKET_ALANLARI = ("unvan", "vkn", "vergi_dairesi", "adres", "telefon", "eposta", "iban", "fatura_seri")
-ROLLER = {"sahip": "Sahip (her şey)", "muhasebeci": "Muhasebeci (kayıt girer)", "izleyici": "İzleyici (yalnız görür)"}
+ROLLER = {"sahip": "Sahip (her şey)", "muhasebeci": "Muhasebeci (kayıt girer)", "izleyici": "İzleyici (yalnız görür)",
+          "uye": "Üye (işaretlenen bölümler)"}
 
 
 def sahip(k: Kullanici = Depends(aktif_kullanici)) -> Kullanici:
@@ -284,8 +286,8 @@ def sirket_guncelle(veri: schemas.SirketBilgisi, db: Session = Depends(get_db), 
 
 @router.get("/kullanicilar")
 def kullanicilar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    return {"roller": ROLLER, "kullanicilar": [
-        {"id": x.id, "ad": x.ad, "eposta": x.eposta, "rol": x.rol, "ben": x.id == k.id}
+    return {"roller": ROLLER, "bolumler": yetki.BOLUMLER, "duzeyler": yetki.DUZEYLER, "kullanicilar": [
+        {"id": x.id, "ad": x.ad, "eposta": x.eposta, "rol": x.rol, "ben": x.id == k.id, "yetkiler": yetki.yetkileri(x)}
         for x in db.scalars(select(Kullanici).where(Kullanici.sirket_id == k.sirket_id).order_by(Kullanici.id))]}
 
 
@@ -299,6 +301,8 @@ def kullanici_ekle(veri: schemas.KullaniciGiris, db: Session = Depends(get_db), 
     if db.scalar(select(Kullanici).where(Kullanici.eposta == eposta)):
         raise HTTPException(409, "Bu e-posta ile kayıtlı bir kullanıcı var.")
     x = Kullanici(eposta=eposta, ad=veri.ad.strip(), sifre_hash=sifre_hashle(veri.sifre), sirket_id=k.sirket_id, rol=veri.rol)
+    if veri.yetkiler is not None and veri.rol != "sahip":
+        x.rol, x.yetkiler = "uye", yetki.temizle(veri.yetkiler)
     db.add(x)
     db.commit()
     return {"id": x.id}
@@ -313,6 +317,10 @@ def kullanici_rol(kullanici_id: int, veri: dict, db: Session = Depends(get_db), 
         raise HTTPException(422, "Kendi sahip yetkinizi kaldıramazsınız.")
     if veri.get("rol"):
         x.rol = veri["rol"]
+        if x.rol != "uye":
+            x.yetkiler = None  # rolün varsayılan yetkileri
+    if veri.get("yetkiler") is not None and x.rol != "sahip":
+        x.rol, x.yetkiler = "uye", yetki.temizle(veri["yetkiler"])
     if veri.get("sifre"):
         if len(veri["sifre"]) < 6:
             raise HTTPException(422, "Şifre en az 6 karakter olmalı.")
