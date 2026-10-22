@@ -101,3 +101,25 @@ def test_eski_yedekler_adetle_sinirli_belgeler_bir_kez_saklanir(tmp_path, monkey
     assert len(list((tmp_path / "y").glob("muhasebe-yedek-*.zip"))) == 3
     assert not (depo / yeni.name).exists()
     eski.unlink()
+
+
+def test_en_eski_yedege_donulebilir_dondukten_once_alinan_yedek_onu_silmez(tmp_path, monkeypatch):
+    """3 yedek varken en eskisine dönülünce, dönmeden önce alınan 4. yedek seçilen yedeği silmemeli."""
+    import time
+    monkeypatch.setattr(yedek, "SAKLAMA_ADEDI", 3)
+    monkeypatch.setenv("MUHASEBE_YEDEK_KLASORLERI", str(tmp_path / "y"))
+    h = yeni_kullanici(f"{uuid.uuid4().hex}@ornek.com")
+    client.post("/api/cariler", json={"unvan": "En Eski Yedekteki Ltd"}, headers=h)
+    ilk = client.post("/api/yedekler", headers=h).json()["dosya"]
+    cari = [c for c in client.get("/api/cariler", headers=h).json() if c["unvan"] == "En Eski Yedekteki Ltd"][0]
+    client.delete(f"/api/cariler/{cari['id']}", headers=h)
+    for _ in range(2):
+        time.sleep(1.05)
+        client.post("/api/yedekler", headers=h)
+    time.sleep(1.05)
+    g = client.post("/api/yedekler/geri-yukle", json={"klasor": str(tmp_path / "y"), "dosya": ilk}, headers=h)
+    assert g.status_code == 200, g.text
+    assert "En Eski Yedekteki Ltd" in [c["unvan"] for c in client.get("/api/cariler", headers=h).json()]
+    assert (tmp_path / "y" / ilk).exists()
+    # Bulunamayan yedek için anlaşılır mesaj
+    assert "bulunamadı" in yedek.yedegi_dogrula(tmp_path / "y" / "muhasebe-yedek-20200101-000000.zip")["hata"]

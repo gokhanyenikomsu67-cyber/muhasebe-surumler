@@ -2270,7 +2270,7 @@ function yedeklerAc() {
         const r = await api("/api/yedekler/geri-yukle", { metod: "POST", veri: { klasor: y.klasor, dosya: y.dosya } });
         alert(`Yedeğe dönüldü (${r.geri_yuklenen}). Dönmeden önceki veriniz ${r.onceki_yedek} adıyla yedeklendi.\n\nProgram yeniden yüklenecek.`);
         location.reload();
-      } catch (e) { bildir(e.message, true); return false; }
+      } catch (e) { bildir(e.message, true); }  // liste yenilensin (dönmeden önce alınan yedek görünsün)
     } }, { ad: "Seçilenleri sil", tehlikeli: true, islem: async (sec) => {
       const klasorler = [...new Set(sec.map((y) => y.klasor))];
       if (!confirm(`${sec.length} yedek dosyası silinecek (${klasorler.join(", ")}).\n\nSilinen yedeğe geri dönülemez. En son yedek silinmez. Devam edilsin mi?`)) return false;

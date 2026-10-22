@@ -95,6 +95,8 @@ def yedegi_dogrula(zip_yolu: Path, klasor: Path | None = None) -> dict:
         if "sirketler" not in sayilar:
             return {"ok": False, "hata": "Yedekteki veritabanı bu programa ait değil."}
         return {"ok": True, "sayilar": sayilar}
+    except FileNotFoundError:
+        return {"ok": False, "hata": "Yedek dosyası bulunamadı; silinmiş ya da taşınmış olabilir."}
     except (OSError, zipfile.BadZipFile, sqlite3.Error) as e:
         return {"ok": False, "hata": f"Yedek açılamadı: {e}"}
 
@@ -107,7 +109,8 @@ def hedef_klasorler() -> list[Path]:
     return yollar
 
 
-def yedek_al() -> dict:
+def yedek_al(koru: Path | None = None) -> dict:
+    """Yedek alır; eski yedekler silinir. koru: silinmeyecek yedek (geri dönülen yedek, yeni yedek yüzünden silinmesin)."""
     if not DATABASE_URL.startswith("sqlite"):
         raise RuntimeError("PostgreSQL yedeği pg_dump ile alınır; bu fonksiyon SQLite içindir.")
     zaman = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -157,7 +160,7 @@ def yedek_al() -> dict:
                 # Kopya (ör. Google Drive klasörü) birebir aynı mı
                 if _ozet(klasor / ad) != ozet:
                     raise OSError("kopya kaynakla aynı değil")
-                eskileri_sil(klasor)
+                eskileri_sil(klasor, koru)
                 sonuc.append({"klasor": str(klasor), "ok": True})
             except OSError as e:
                 sonuc.append({"klasor": str(klasor), "ok": False, "hata": str(e)})
@@ -237,11 +240,13 @@ def _kullanilan_belgeler(baglanti) -> set[str]:
     return adlar
 
 
-def eskileri_sil(klasor: Path):
-    """En yeni SAKLAMA_ADEDI (3) yedek kalır, eskiler silinir; artık hiçbir yedeğin kullanmadığı belgeler de silinir."""
+def eskileri_sil(klasor: Path, koru: Path | None = None):
+    """En yeni SAKLAMA_ADEDI (3) yedek kalır, eskiler silinir; artık hiçbir yedeğin kullanmadığı belgeler de silinir.
+    koru: o an geri dönülen yedek silinmez (bir sonraki yedekte sırası gelince silinir)."""
     tumu = sorted(klasor.glob(f"{_ONEK}*.zip"))  # ad tarih sırasıdır: muhasebe-yedek-YYYYMMDD-SSDDss.zip
     for d in tumu[:-SAKLAMA_ADEDI]:
-        d.unlink(missing_ok=True)
+        if koru is None or d.name != koru.name:
+            d.unlink(missing_ok=True)
     _belge_deposunu_temizle(klasor)
 
 
@@ -306,7 +311,7 @@ def yedek_bul(klasor: str, dosya: str) -> Path:
 def geri_yukle(zip_yolu: Path) -> dict:
     """Seçilen yedeğe döner: önce bugünkü veri yedeklenir, sonra yedek geçici veritabanına açılıp doğrulanır;
     sağlamsa çalışan veritabanının yerine (SQLite yedekleme yöntemiyle, sayfa sayfa) yazılır, belgeler geri konur."""
-    onceki = yedek_al()  # yanlış yedeğe dönülürse bu yedekle geri gelinir
+    onceki = yedek_al(koru=zip_yolu)  # yanlış yedeğe dönülürse bu yedekle geri gelinir; seçilen yedek silinmez
     with tempfile.TemporaryDirectory() as gecici:
         dogrulama = yedegi_dogrula(zip_yolu, Path(gecici))
         if not dogrulama["ok"]:
