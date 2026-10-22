@@ -2224,7 +2224,9 @@ def virman_mi(aciklama: str, kendi: list[str], tutar: float = 0) -> bool:
         alanlar = parcalar[1:2] if tutar < 0 and len(parcalar) > 2 else parcalar[:1] if tutar > 0 else parcalar[:2]
         ham = _karsi_alan(aciklama, tutar)
         if ham:
-            alanlar = [*alanlar, sade(ham)]
+            # Gönderen/alıcı alanı okunduysa karar odur: açıklamada firmamızın adı geçmesi ("FİRMAMIZ İŞ BANKASI
+            # GEÇİŞ*ÖRNEK ENERJİ LTD*...") başka firmadan gelen parayı virman yapmaz.
+            return re.sub(r"[^a-z0-9 ]", " ", sade(ham)).split()[:len(kendi)] == kendi
         for alan in alanlar:
             kelimeler = re.sub(r"[^a-z0-9 ]", " ", alan).split()
             if kelimeler[:len(kendi)] == kendi:

@@ -673,6 +673,8 @@ def ekstre_otomatik(dosya: UploadFile = File(...), yontem: str = "otomatik", hes
         hesap, yeni = None, False
         if iban:
             hesap = next((b for b in hesaplar if kural.iban_uyar(b.iban, iban)), None)
+            if hesap is None and (hesap := _ibansiz_ayni_banka(hesaplar, kural.iban_banka(iban))):
+                hesap.iban, hesap.ad = iban, f"{hesap.banka} {iban[-4:]}"
             if hesap is None:
                 banka = kural.iban_banka(iban)
                 hesap = BankaHesabi(sirket_id=k.sirket_id, ad=f"{banka or 'Banka'} {iban[-4:]}", banka=banka, iban=iban)
@@ -707,9 +709,19 @@ def _numaradan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: 
 
 def _banka_kodundan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: str) -> BankaHesabi | None:
     """"FİRMAMIZ ...*0010*..." gibi satırda karşı bankanın kodu yazar; o bankada tek hesabımız varsa para oradan gelmiştir."""
+    banka = _koddaki_banka(aciklama)
+    adaylar = [b for b in hesaplar if banka and b.id != hesap.id and b.tur != kartlar.KART and (kural.iban_banka(b.iban) or b.banka) == banka]
+    return adaylar[0] if len(adaylar) == 1 else None
+
+
+def _koddaki_banka(aciklama: str) -> str | None:
     m = re.search(r"\*0*(\d{2,4})\*", aciklama)
-    banka = kural.BANKA_KODLARI.get(m.group(1).zfill(5)) if m else None
-    adaylar = [b for b in hesaplar if banka and b.id != hesap.id and b.tur != kartlar.KART and kural.iban_banka(b.iban) == banka]
+    return kural.BANKA_KODLARI.get(m.group(1).zfill(5)) if m else None
+
+
+def _ibansiz_ayni_banka(hesaplar: list[BankaHesabi], banka: str | None) -> BankaHesabi | None:
+    """Virmandaki banka kodundan IBAN'sız açılmış hesap (ör. 'Ziraat Bankası'): o bankanın ekstresi gelince ona yazılır."""
+    adaylar = [b for b in hesaplar if banka and not b.iban and b.banka == banka and b.tur != kartlar.KART and b.ad == banka]
     return adaylar[0] if len(adaylar) == 1 else None
 
 
@@ -770,6 +782,9 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
                         if b.ad == f"Banka {iban[-4:]}":
                             b.ad = f"{b.banka} {iban[-4:]}"
                 return b
+        if "*" not in iban and (b := _ibansiz_ayni_banka(hesaplar, banka)):
+            b.iban, b.ad = iban, f"{b.banka} {iban[-4:]}"
+            return b
         b = BankaHesabi(sirket_id=k.sirket_id, ad=f"{banka or 'Banka'} {iban[-4:]}", banka=banka, iban=iban)
         db.add(b)
         db.flush()
@@ -965,6 +980,21 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
             yeni_virmanlar.append(yeni)
         eklenen += 1
     eslesen += _virmanlari_esle(db, hesap, yeni_virmanlar)
+    # Karşı hesabı hâlâ bilinmeyen virmanda karşı bankanın kodu yazıyorsa ("FİRMAMIZ*0010*..."), o bankada hesabımız
+    # tanımlı değilse banka adıyla açılır; o bankanın ekstresi yüklenince IBAN'ı eklenir.
+    for v in yeni_virmanlar:
+        if (v.ai_okuma or {}).get("karsi_hesap_id") or v.bagli_hareket_id:
+            continue
+        banka = _koddaki_banka(v.aciklama or "")
+        if not banka or banka == (kural.iban_banka(hesap.iban) or hesap.banka) or any(
+                (kural.iban_banka(b.iban) or b.banka) == banka for b in hesaplar if b.tur != kartlar.KART):
+            continue
+        b = BankaHesabi(sirket_id=k.sirket_id, ad=banka, banka=banka)
+        db.add(b)
+        db.flush()
+        hesaplar.append(b)
+        yeni_hesap.append(b.ad)
+        v.ai_okuma = {**(v.ai_okuma or {}), "karsi_hesap_id": b.id}
     # Ekstrenin kapsadığı günlerde yeni okumanın artık vermediği onaylanmamış eski satırlar (ör. ek hesabın iç aktarımı) kalkar
     tarihler = [x["tarih"] for x in satirlar if x.get("tarih")]
     kalkan = 0

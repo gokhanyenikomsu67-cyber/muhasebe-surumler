@@ -66,6 +66,13 @@ def cek_kelimesi(aciklama: str | None) -> bool:
     return bool(_CEK_KELIMESI.search(kural.sade(aciklama or "")))
 
 
+def cek_no_geciyor(cek_no: str | None, aciklama: str | None) -> bool:
+    """Çek numarası ekstre açıklamasında ayrı bir sayı olarak geçiyor mu ("3001234 064 4601 ... ÇEK 067/0818*TKS ÖDEME")?
+    Baştaki sıfırlar yok sayılır; 5 haneden kısa numara güvenilmez."""
+    no = re.sub(r"\D", "", cek_no or "").lstrip("0")
+    return len(no) >= 5 and no in {x.lstrip("0") for x in re.findall(r"\d+", aciklama or "")}
+
+
 def ekstre_cekle_esle(db: Session, sirket_id: int, hesap: BankaHesabi, tarih: date, yon: str, tutar: float,
                       aciklama: str | None, anahtar: str, bakiye) -> bool:
     """Ekstre satırı bir çek tahsilatı/ödemesi mi? Öyleyse yeni hareket açılmaz:
@@ -82,10 +89,12 @@ def ekstre_cekle_esle(db: Session, sirket_id: int, hesap: BankaHesabi, tarih: da
         h.tarih = tarih  # bankanın yazdığı gün esas
         return True
     cek_yon, durumlar = ("alinan", ("tahsilde", "portfoyde")) if yon == "giris" else ("verilen", ("verildi",))
-    adaylar = [c for c in db.scalars(select(Cek).where(
-        Cek.sirket_id == sirket_id, Cek.yon == cek_yon, Cek.durum.in_(durumlar), func.abs(Cek.tutar - abs(tutar)) < 0.005,
-        (Cek.banka_hesap_id == hesap.id) | Cek.banka_hesap_id.is_(None)))
-        if c.vade - timedelta(days=EKSTRE_GUN) <= tarih <= c.vade + timedelta(days=30)
+    tutanlar = list(db.scalars(select(Cek).where(
+        Cek.sirket_id == sirket_id, Cek.yon == cek_yon, Cek.durum.in_(durumlar), func.abs(Cek.tutar - abs(tutar)) < 0.005)))
+    # Çek numarası açıklamada geçiyorsa o çektir (vade ve hesap bakılmaz)
+    adaylar = [c for c in tutanlar if cek_no_geciyor(c.cek_no, aciklama)] or [
+        c for c in tutanlar if c.banka_hesap_id in (hesap.id, None)
+        and c.vade - timedelta(days=EKSTRE_GUN) <= tarih <= c.vade + timedelta(days=30)
         # Tahsile bu bankaya verilmiş çekte tutar ve vade yeter; ötekilerde açıklamada çek/takas geçmeli.
         and (c.banka_hesap_id == hesap.id and c.durum != "portfoyde" or cek_kelimesi(aciklama))]
     if not adaylar:
@@ -97,6 +106,36 @@ def ekstre_cekle_esle(db: Session, sirket_id: int, hesap: BankaHesabi, tarih: da
     yeni.ekstre_anahtari, yeni.ai_okuma = anahtar, {"bakiye": bakiye, "ekstre_aciklama": aciklama}
     db.add(yeni)
     db.flush()
+    return True
+
+
+def _ekstre_satirini_cek_yap(c: Cek, e: Hareket) -> None:
+    """Bu para ekstreden zaten gelmiş: o satır çekin tahsil/ödeme hareketi olur, ikinci kez yazılmaz."""
+    tur, ne = ("cek_tahsil", "tahsil edildi") if e.yon == "giris" else ("cek_odeme", "ödendi")
+    sablon = _hareket(c, e.tarih, e.yon, tur, banka_hesap_id=e.banka_hesap_id, aciklama=ne)
+    e.tur, e.cek_id, e.cari_id, e.kaynak, e.durum = tur, c.id, None, "cek", "onayli"
+    e.gider_turu, e.santiye_id = None, c.santiye_id
+    e.ai_okuma = {**(e.ai_okuma or {}), "ekstre_aciklama": e.aciklama}
+    e.aciklama = sablon.aciklama
+
+
+def cekten_ekstreyi_esle(db: Session, c: Cek) -> bool:
+    """Çek sonradan girildi/yüklendi: ekstrede çek numarasıyla geçen aynı tutarlı satır varsa çek
+    ödendi/tahsil edildi sayılır, o satır çekin hareketi olur (cariye ikinci kez yazılmaz)."""
+    yon, durumlar = ("giris", ("tahsilde", "portfoyde")) if c.yon == "alinan" else ("cikis", ("verildi",))
+    if c.durum not in durumlar or not c.cek_no:
+        return False
+    db.flush()
+    e = next((h for h in db.scalars(select(Hareket).where(
+        Hareket.sirket_id == c.sirket_id, Hareket.banka_hesap_id.is_not(None), Hareket.cek_id.is_(None),
+        Hareket.ekstre_anahtari.is_not(None), Hareket.yon == yon, Hareket.bagli_hareket_id.is_(None),
+        Hareket.durum.in_(("taslak", "onayli")), func.abs(Hareket.tutar - float(c.tutar)) < 0.005).order_by(Hareket.tarih))
+        if cek_no_geciyor(c.cek_no, h.aciklama)), None)
+    if e is None:
+        return False
+    c.banka_hesap_id, c.islem_tarihi = e.banka_hesap_id, e.tarih
+    c.durum = "tahsil_edildi" if c.yon == "alinan" else "odendi"
+    _ekstre_satirini_cek_yap(c, e)
     return True
 
 
@@ -184,6 +223,7 @@ def _kontrol(db: Session, veri: schemas.CekGiris, k: Kullanici):
 @router.post("", response_model=schemas.CekCikis)
 def ekle(veri: schemas.CekGiris, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     c = cek_olustur(db, veri, k)
+    cekten_ekstreyi_esle(db, c)
     db.commit()
     return cikis(c)
 
@@ -309,12 +349,7 @@ def islem_uygula(db: Session, c: Cek, veri: schemas.CekIslem, k: Kullanici) -> N
         c.banka_hesap_id = banka.id if banka else None
         yon, tur, ne = ("giris", "cek_tahsil", "tahsil edildi") if veri.islem == "tahsil" else ("cikis", "cek_odeme", "ödendi")
         if banka and (e := cek_ekstre_satiri(db, c, banka, veri.tarih, yon)):
-            # Bu para ekstreden zaten gelmiş: o satır çekin hareketi olur, ikinci kez yazılmaz.
-            sablon = _hareket(c, e.tarih, yon, tur, banka_hesap_id=banka.id, aciklama=ne)
-            e.tur, e.cek_id, e.cari_id, e.kaynak, e.durum = tur, c.id, None, "cek", "onayli"
-            e.gider_turu, e.santiye_id = None, c.santiye_id
-            e.ai_okuma = {**(e.ai_okuma or {}), "ekstre_aciklama": e.aciklama}
-            e.aciklama = sablon.aciklama
+            _ekstre_satirini_cek_yap(c, e)
         else:
             # Kasadan: banka hesabı boş hareket Nakit Kasa'dır
             db.add(_hareket(c, veri.tarih, yon, tur, banka_hesap_id=banka.id if banka else None,
@@ -503,6 +538,8 @@ def toplu_ekle(istek: TopluCek, db: Session = Depends(get_db), k: Kullanici = De
                 if r.akibet and r.akibet.islem:
                     db.flush()
                     islem_uygula(db, c, r.akibet, k)
+                else:
+                    cekten_ekstreyi_esle(db, c)
             sonuc.append({"ok": True, "id": c.id})
         except HTTPException as e:
             sonuc.append({"ok": False, "hata": e.detail})

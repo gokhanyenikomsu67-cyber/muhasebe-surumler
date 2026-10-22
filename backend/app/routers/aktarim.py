@@ -12,7 +12,7 @@ from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
 from ..models import GIDER_TURLERI, Cari, Fatura, Kullanici, Santiye, Sirket
 from ..yukleme import dosyayi_oku
-from .cekler import cek_olustur
+from .cekler import cek_olustur, cekten_ekstreyi_esle
 from .faturalar import kalemleri_yaz
 from .raporlar import _excel
 
@@ -267,12 +267,13 @@ async def cek_yukle(dosya: UploadFile = File(...), db: Session = Depends(get_db)
                 raise ValueError("vade veya tutar okunamadı")
             cari = cariler.bul(r.get("Cari Ünvan"), r.get("Cari VKN"), "musteri" if yon == "alinan" else "tedarikci")
             metin = lambda a: str(r[a]).strip() if r.get(a) not in (None, "") else None  # noqa: E731
-            cek_olustur(db, schemas.CekGiris(
+            c = cek_olustur(db, schemas.CekGiris(
                 yon=yon, tur="senet" if kural.sade(str(r.get("Tür (Çek/Senet)", ""))).startswith("senet") else "cek",
                 cek_no=metin("Çek No"), banka=metin("Banka"), sube=metin("Şube"), hesap_no=metin("Hesap No"),
                 kesideci=metin("Çeki Yazan Firma") or metin("Keşideci"), tutar=abs(tutar), vade=vade,
                 alis_tarihi=kural.tarih_coz(r.get("Alış/Veriliş Tarihi")), cari_id=cari.id if cari else None,
                 santiye_id=santiyeler.bul(r.get("Şantiye")), aciklama=metin("Açıklama")), k)
+            cekten_ekstreyi_esle(db, c)
             eklenen += 1
         except (ValueError, HTTPException) as e:
             hatalar.append(f"{r['_satir']}. satır: {getattr(e, 'detail', e)}")

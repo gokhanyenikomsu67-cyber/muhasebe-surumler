@@ -152,3 +152,49 @@ def test_ek_hesapli_ekstrede_bakiye_toplamdir_ic_aktarim_hareket_sayilmaz():
     client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in ta]}, headers=h)
     hesap = client.get("/api/banka-hesaplari", headers=h).json()[0]
     assert hesap["ekstre_bakiye"] == -800 and hesap["mutabakat_farki"] == 0
+
+
+def _cek(h, no, tutar, yon="verilen"):
+    cari = client.post("/api/cariler", json={"unvan": f"Örnek Tedarikçi {no}"}, headers=h).json()
+    r = client.post("/api/cekler", json={"yon": yon, "cek_no": no, "tutar": tutar, "vade": "2026-12-31", "cari_id": cari["id"]}, headers=h)
+    assert r.status_code == 200, r.text
+    return r.json(), cari
+
+
+def test_cek_odemesi_cek_numarasindan_bulunur_once_cek_sonra_ekstre():
+    h = _kullanici()
+    cek, cari = _cek(h, "3001234", 2450)
+    ib = iban("00064", "3334445")
+    v = _yukle(h, "a.csv", _csv(ib, [("05.08.2026", -2450, "-2450,00", "3001234 064 1000 0000000000333444 ÇEK 067/0818*TKS ÖDEME 1000")]))
+    assert "çekle eşleşti" in v["notlar"] and not _taslak(h)  # vadesinden önce de olsa numarasından bulunur
+    assert client.get(f"/api/cekler/{cek['id']}", headers=h).json()["durum"] == "odendi"
+    assert client.get(f"/api/raporlar/cari-ekstre/{cari['id']}", headers=h).json()["bakiye"] == 2450  # cariye bir kez
+
+
+def test_cek_odemesi_cek_numarasindan_bulunur_once_ekstre_sonra_cek():
+    h = _kullanici()
+    ib = iban("00064", "3334446")
+    _yukle(h, "a.csv", _csv(ib, [("05.08.2026", -2450, "-2450,00", "3001235 064 1000 0000000000333444 ÇEK 067/0818*TKS ÖDEME 1000")]))
+    assert [x["tur"] for x in _taslak(h)] == ["cek_odeme"]
+    cek, cari = _cek(h, "3001235", 2450)
+    assert cek["durum"] == "odendi" and not _taslak(h)
+    hesap = client.get("/api/banka-hesaplari", headers=h).json()[0]
+    assert hesap["bakiye"] == -2450 and hesap["mutabakat_farki"] == 0
+    assert client.get(f"/api/raporlar/cari-ekstre/{cari['id']}", headers=h).json()["bakiye"] == 2450
+
+
+def test_banka_kodlu_virmanda_hesap_yoksa_banka_adiyla_acilir_baska_firma_virman_degil():
+    r = client.post("/api/kayit", json={"sirket_unvan": "DENEME", "ad": "x", "eposta": f"{uuid.uuid4().hex}@ornek.com", "sifre": "gizli123"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    ib = iban("00064", "3334447")
+    _yukle(h, "a.csv", _csv(ib, [
+        ("05.08.2026", 140, "140,00", "DENEME YAPI LİMİTED ŞİRKETİ*0010*ZİRAAT MOBİL EFT DENEME ZİRAATTEN TRANSFER*0104203"),
+        ("06.08.2026", 200, "340,00", "DENEME İŞ BANKASI GEÇİŞ*ÖRNEK ENERJİ LİMİTED ŞİRKETİ*H2609990000001 (Havale)")]))
+    t = {x["tutar"]: x for x in _taslak(h)}
+    hesaplar = {x["id"]: x for x in client.get("/api/banka-hesaplari", headers=h).json()}
+    assert t[140]["tur"] == "virman" and hesaplar[t[140]["karsi_hesap_id"]]["ad"] == "Ziraat Bankası" and not t[140]["sorun"]
+    assert t[200]["tur"] == "tahsilat" and t[200]["cari_unvan"] == "ÖRNEK ENERJİ LİMİTED ŞİRKETİ"
+    # O bankanın ekstresi gelince IBAN'ı açılan hesaba yazılır, ikinci hesap açılmaz
+    zb = iban("00010", "5556667")
+    _yukle(h, "z.csv", _csv(zb, [("05.08.2026", -140, "860,00", "DENEME İŞ BANKASINA TRANSFER")]))
+    assert sorted(x["ad"] for x in client.get("/api/banka-hesaplari", headers=h).json()) == ["Ziraat Bankası 6667", "İş Bankası 4447"]
