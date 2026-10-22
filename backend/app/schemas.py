@@ -64,6 +64,7 @@ class SantiyeGiris(BaseModel):
 
 class SantiyeCikis(SantiyeGiris, Orm):
     id: int
+    eski_adlar: str | None = None
 
 
 class DepoGiris(BaseModel):
@@ -76,6 +77,7 @@ class DepoGiris(BaseModel):
 
 class DepoCikis(DepoGiris, Orm):
     id: int
+    eski_adlar: str | None = None
 
 
 class KalemGiris(BaseModel):

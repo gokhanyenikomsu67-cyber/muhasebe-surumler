@@ -12,6 +12,7 @@ baslat.bat bu dosyayı "uygula" ile çalıştırır: değişen dosyaların eskis
 yazılır. Veri klasörüne (Belgeler\\Muhasebe Verileri), .env'e ve program ortamına (.venv) dokunulmaz. Yeni sürüm
 açılamazsa baslat.bat "geri" ile eski sürüm geri konur.
 """
+import errno
 import json
 import os
 import re
@@ -30,6 +31,7 @@ BEKLIYOR = PROGRAM / "guncelleme-bekliyor.txt"   # içinde hazırlanan paketin y
 DENENIYOR = PROGRAM / "guncelleme-deneniyor.txt"  # yeni sürüm ilk kez açılıyor; açılınca silinir
 SONUC = PROGRAM / "guncelleme-sonucu.txt"
 ESKI = PROGRAM / "eski-surum"
+GEREKLI_YER = 100 * 1024 * 1024  # güncelleme için diskte istenen en az boş yer (paket, eski dosyalar, yedek)
 # Güncellemede hiç dokunulmayan yerler (program klasörüne göre)
 KORUNAN = (".env", "backend/.venv", "backend/veri", "eski-surum", "baslat-gunlugu.txt", "guncelleme-bekliyor.txt",
            "guncelleme-deneniyor.txt", "guncelleme-sonucu.txt", "yeniden-baslatiliyor.txt", "python312-son-deneme.txt")
@@ -147,15 +149,35 @@ def hazirla() -> dict:
     klasor = VERI_KLASORU / "guncelleme"
     klasor.mkdir(exist_ok=True)
     hedef = klasor / "yeni-surum.zip"
-    if d["kaynak"] == "klasor":
-        shutil.copy2(_klasordeki_en_yeni()[1], hedef)
-    else:
+    # Paket (~5 MB), açılırken eski dosyaların kopyası ve veri yedeği için yer: yoksa indirmeden önce söylenir
+    for yer in {VERI_KLASORU, PROGRAM}:
         try:
-            _indir(f"https://codeload.github.com/{DEPO}/zip/refs/heads/{DAL}", hedef)
-        except Exception as e:  # noqa: BLE001
-            raise GuncellemeHatasi("Yeni sürüm indirilemedi; internet bağlantısını kontrol edin.") from e
-    _paketi_dogrula(hedef)
-    yedek.yedek_al()  # güncellemeden önce veri yedeği; alınamazsa güncelleme yapılmaz
+            yedek.yer_kontrolu(yer, GEREKLI_YER)
+        except OSError as e:
+            raise GuncellemeHatasi(str(e)) from e
+    try:
+        if d["kaynak"] == "klasor":
+            shutil.copy2(_klasordeki_en_yeni()[1], hedef)
+        else:
+            try:
+                _indir(f"https://codeload.github.com/{DEPO}/zip/refs/heads/{DAL}", hedef)
+            except OSError as e:
+                if getattr(e, "errno", None) == errno.ENOSPC:
+                    raise
+                raise GuncellemeHatasi("Yeni sürüm indirilemedi; internet bağlantısını kontrol edin.") from e
+            except Exception as e:  # noqa: BLE001
+                raise GuncellemeHatasi("Yeni sürüm indirilemedi; internet bağlantısını kontrol edin.") from e
+        _paketi_dogrula(hedef)
+        yedek.yedek_al()  # güncellemeden önce veri yedeği; alınamazsa güncelleme yapılmaz
+    except OSError as e:
+        hedef.unlink(missing_ok=True)
+        if getattr(e, "errno", None) == errno.ENOSPC:
+            raise GuncellemeHatasi(f"Diskte yer kalmadı ({yedek.boyut_yazisi(yedek.bos_yer(VERI_KLASORU))} boş). Geri Dönüşüm "
+                                   "Kutusu'nu boşaltın, İndirilenler klasörünü temizleyin, sonra Tekrar dene.") from e
+        raise GuncellemeHatasi(str(e)) from e
+    except RuntimeError as e:  # yedek alınamadı
+        hedef.unlink(missing_ok=True)
+        raise GuncellemeHatasi(f"Güncellemeden önce yedek alınamadı: {e}") from e
     BEKLIYOR.write_text(str(hedef), encoding="utf-8")
     return {"yeni": d["yeni"]}
 
@@ -228,6 +250,10 @@ def acildi() -> None:
     if DENENIYOR.exists():
         _durum_yaz(son_guncelleme={"surum": _surum(), "tarih": date.today().isoformat()})
         DENENIYOR.unlink(missing_ok=True)
+    # Uygulanmış paket yer kaplamasın (bekleyen güncelleme yoksa)
+    if not BEKLIYOR.exists():
+        from .db import VERI_KLASORU
+        (VERI_KLASORU / "guncelleme" / "yeni-surum.zip").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

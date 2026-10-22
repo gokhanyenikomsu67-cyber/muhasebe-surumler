@@ -1551,9 +1551,9 @@ def test_sema_surumlu_guncelleme_once_yedek_alir(tmp_path, monkeypatch):
         b.execute(text("INSERT INTO sirketler (unvan) VALUES ('ARMA')"))
     dbm.db_guncelle(motor)
     assert dbm.sema_surumu(motor) == dbm.SEMA_ADIMLARI[-1][0]
-    assert len(list((tmp_path / "yedekler").glob("sema-1-oncesi-*.db"))) == 1
+    assert len(list((tmp_path / "yedekler").glob("sema-*-oncesi-*.db"))) == 2  # son 2 kopya kalır
     dbm.db_guncelle(motor)  # ikinci açılışta adım tekrar çalışmaz, yedek alınmaz
-    assert len(list((tmp_path / "yedekler").glob("*.db"))) == len(dbm.SEMA_ADIMLARI)
+    assert len(list((tmp_path / "yedekler").glob("*.db"))) == min(2, len(dbm.SEMA_ADIMLARI))  # son 2 kopya kalır
 
     # Yarıda kalan adım geri alınır, sürüm ilerlemez; yedekte eski veri durur
     def bozuk(baglanti, _motor):

@@ -110,7 +110,7 @@ class _Santiyeler:
         ad = str(ad).strip() if ad not in (None, "") else None
         if not ad:
             return None
-        s = next((s for s in self.liste if kural.sade(s.ad) == kural.sade(ad)), None)
+        s = next((s for s in self.liste if kural.adi_bu_mu(s, ad)), None)
         if not s:
             s = Santiye(sirket_id=self.k.sirket_id, ad=ad)
             self.db.add(s)

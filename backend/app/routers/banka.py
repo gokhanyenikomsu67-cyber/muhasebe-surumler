@@ -436,8 +436,6 @@ def dosya_turu(dosya: UploadFile) -> str:
         mime = "text/csv"
     elif ad.endswith(".pdf"):
         mime = "application/pdf"
-    elif ad.endswith(".xls"):
-        raise HTTPException(422, "Eski .xls biçimi desteklenmiyor. Dosyayı Excel'de açıp .xlsx olarak kaydedin.")
     if mime not in EKSTRE_TURLERI:
         raise HTTPException(422, "Ekstre Excel (.xlsx), CSV, PDF veya görsel olmalı.")
     return mime

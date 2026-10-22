@@ -179,7 +179,15 @@ def sistem_durumu(k: Kullanici = Depends(aktif_kullanici)):
     from .surum import ek_paketler
     return {"ocr_var": ocr.var_mi(), "ocr_kurulum": _KURULUM, "kurulabilir": os.name == "nt", "ek_paket_hatasi": ek_hata,
             "ek_paketler": ek_paketler(), "ek_kurulum": _ek_kurulum_durumu(),
-            "son_yedek": d.get("son_yedek"), "son_deneme": d.get("son_deneme"), "guncelleme": _guncelleme_durumu()}
+            "son_yedek": d.get("son_yedek"), "son_deneme": d.get("son_deneme"), "guncelleme": _guncelleme_durumu(),
+            "disk": _disk_durumu()}
+
+
+def _disk_durumu() -> dict | None:
+    try:
+        return yedek.disk_durumu()
+    except OSError:
+        return None
 
 
 # --- Kendi kendini güncelleme ------------------------------------------------------------------------------------

@@ -32,7 +32,7 @@ def ayni_adli_depo(db: Session, sirket_id: int, ad: str | None, santiye_id: int 
     """Aynı şantiyede aynı adlı depo (harf/Türkçe karakter farkı yok sayılır)."""
     anahtar = kural.ad_anahtari(ad)
     return next((d for d in db.scalars(select(Depo).where(Depo.sirket_id == sirket_id).order_by(Depo.id))
-                 if d.id != haric and anahtar and kural.ad_anahtari(d.ad) == anahtar and d.santiye_id == santiye_id), None)
+                 if d.id != haric and anahtar and kural.adi_bu_mu(d, ad) and d.santiye_id == santiye_id), None)
 
 
 def _depo_cikis(d: Depo) -> dict:
@@ -75,7 +75,8 @@ def depo_guncelle(depo_id: int, veri: schemas.DepoGiris, db: Session = Depends(g
     _depo_dogrula(db, veri, k)
     if ayni_adli_depo(db, k.sirket_id, veri.ad, veri.santiye_id, haric=d.id) is not None:
         raise HTTPException(409, f"Bu şantiyede '{veri.ad}' adında bir depo zaten var.")
-    for alan, deger in veri.model_dump().items():
+    kural.ad_degistir(d, veri.ad)  # depo kalemleri ve taşeron borcu aynı depoda kalır; eski ad saklanır
+    for alan, deger in veri.model_dump(exclude={"ad"}).items():
         setattr(d, alan, deger)
     db.commit()
     return _depo_cikis(d)

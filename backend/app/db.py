@@ -138,6 +138,8 @@ EKLENEN_SUTUNLAR = [
     ("faturalar", "stopaj", "NUMERIC(14, 2) DEFAULT 0 NOT NULL"),
     ("fatura_kalemleri", "stopaj_orani", "NUMERIC(5, 2) DEFAULT 0 NOT NULL"),
     ("fatura_kalemleri", "depo_id", "INTEGER REFERENCES depolar(id)"),
+    ("santiyeler", "eski_adlar", "TEXT"),
+    ("depolar", "eski_adlar", "TEXT"),
 ]
 
 
@@ -161,12 +163,13 @@ SEMA_ADIMLARI = [
     (1, "Eski veritabanına eksik sütunlar eklenir", _sutunlari_ekle),
     (2, "Faturalara stopaj sütunları eklenir", _sutunlari_ekle),
     (3, "Fatura kalemlerine depo sütunu eklenir", _sutunlari_ekle),
+    (4, "Şantiye ve depolara eski adlar sütunu eklenir", _sutunlari_ekle),
 ]
 SEMA_YEDEK_KLASORU = VERI_KLASORU / "guncelleme-yedekleri"
 
 
 def _sema_yedegi(motor, surum: int) -> Path | None:
-    """Güncelleme adımından önce SQLite veritabanının tam kopyası (WAL içindekiler dahil); son 5 kopya tutulur."""
+    """Güncelleme adımından önce SQLite veritabanının tam kopyası (WAL içindekiler dahil); son 2 kopya tutulur."""
     if motor.dialect.name != "sqlite" or not motor.url.database:
         return None
     from datetime import datetime
@@ -174,7 +177,7 @@ def _sema_yedegi(motor, surum: int) -> Path | None:
     hedef = SEMA_YEDEK_KLASORU / f"sema-{surum}-oncesi-{datetime.now():%Y%m%d-%H%M%S}.db"
     with sqlite3.connect(motor.url.database) as kaynak, sqlite3.connect(hedef) as kopya:
         kaynak.backup(kopya)
-    for eski in sorted(SEMA_YEDEK_KLASORU.glob("sema-*.db"), key=lambda p: p.stat().st_mtime)[:-5]:
+    for eski in sorted(SEMA_YEDEK_KLASORU.glob("sema-*.db"), key=lambda p: p.stat().st_mtime)[:-2]:
         eski.unlink(missing_ok=True)
     return hedef
 

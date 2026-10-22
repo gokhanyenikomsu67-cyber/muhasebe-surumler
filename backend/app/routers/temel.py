@@ -131,7 +131,7 @@ def ayni_adli_cari(db: Session, sirket_id: int, unvan: str | None, vkn: str | No
 def ayni_adli_santiye(db: Session, sirket_id: int, ad: str | None, haric: int | None = None) -> Santiye | None:
     anahtar = kural.ad_anahtari(ad)
     return next((s for s in db.scalars(select(Santiye).where(Santiye.sirket_id == sirket_id).order_by(Santiye.id))
-                 if s.id != haric and anahtar and kural.ad_anahtari(s.ad) == anahtar), None)
+                 if s.id != haric and anahtar and kural.adi_bu_mu(s, ad)), None)
 
 
 @router.post("/cariler", response_model=schemas.CariCikis)
@@ -228,9 +228,13 @@ def santiye_ekle(veri: schemas.SantiyeGiris, db: Session = Depends(get_db), k: K
 @router.put("/santiyeler/{santiye_id}", response_model=schemas.SantiyeCikis)
 def santiye_guncelle(santiye_id: int, veri: schemas.SantiyeGiris, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     s = sirket_kaydi(db, Santiye, santiye_id, k)
-    if ayni_adli_santiye(db, k.sirket_id, veri.ad, haric=s.id) is not None:
-        raise HTTPException(409, f"'{veri.ad}' adında bir şantiye zaten var.")
-    for alan, deger in veri.model_dump().items():
+    if not (veri.ad or "").strip():
+        raise HTTPException(422, "Şantiye adını yazın.")
+    if (ayni := ayni_adli_santiye(db, k.sirket_id, veri.ad, haric=s.id)) is not None:
+        raise HTTPException(409, f"'{veri.ad}' adı '{ayni.ad}' şantiyesinde kullanılıyor.")
+    # Ad değişince fatura, çek, hareket ve taşeron kayıtları aynı şantiyede kalır (kimlikle bağlı); eski ad saklanır
+    kural.ad_degistir(s, veri.ad)
+    for alan, deger in veri.model_dump(exclude={"ad"}).items():
         setattr(s, alan, deger)
     db.commit()
     return s

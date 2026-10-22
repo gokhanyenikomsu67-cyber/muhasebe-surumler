@@ -37,6 +37,31 @@ def ad_anahtari(ad: str | None) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", sade(ad)).split())
 
 
+def kayit_adlari(kayit) -> list[str]:
+    """Şantiye/depo adı ve önceki adları: ad değişse de eski adla gelen belge aynı kayda eşlenir."""
+    return [kayit.ad, *[x.strip() for x in (getattr(kayit, "eski_adlar", None) or "").splitlines() if x.strip()]]
+
+
+def adi_bu_mu(kayit, ad: str | None) -> bool:
+    anahtar = ad_anahtari(ad)
+    return bool(anahtar) and any(ad_anahtari(x) == anahtar for x in kayit_adlari(kayit))
+
+
+def ad_degistir(kayit, yeni: str) -> None:
+    """Adı değiştirir; eski ad takma ad olarak saklanır (kayıtlar kimlikle bağlı, ad yalnız görüntü)."""
+    yeni = (yeni or "").strip()
+    if not yeni or yeni == kayit.ad:
+        return
+    eskiler = kayit_adlari(kayit)
+    anahtar = ad_anahtari(yeni)
+    kalan = []
+    for x in eskiler:
+        if ad_anahtari(x) != anahtar and all(ad_anahtari(x) != ad_anahtari(y) for y in kalan):
+            kalan.append(x)
+    kayit.ad = yeni
+    kayit.eski_adlar = "\n".join(kalan) or None
+
+
 # Ünvanın şirket türü ekleri: "Gelen Firma Ltd." ile "GELEN FİRMA LTD. ŞTİ." aynı firmadır.
 _HUKUKI_EK = {"ltd", "sti", "as", "a", "s", "limited", "sirketi", "sirket", "anonim", "tic", "ticaret", "san", "sanayi",
               "ve", "ltdsti", "koll", "kom", "kolektif", "komandit"}

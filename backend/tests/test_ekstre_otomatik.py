@@ -53,3 +53,16 @@ def test_ibansiz_dosyada_birden_fazla_hesap_varsa_sorulur():
     hid = client.get("/api/banka-hesaplari", headers=h).json()[1]["id"]
     r = client.post(f"/api/ekstre-yukle?hesap_id={hid}", files={"dosya": ("e.csv", veri, "text/csv")}, headers=h)
     assert r.status_code == 200 and r.json()["eklenen"] == 1, r.text
+
+
+def test_xls_adli_html_ekstre_okunur():
+    """Bankaların .xls adıyla verdiği HTML tablo .xlsx'e çevrilip okunur (gerçek .xls BIFF dosyası xlrd ile)."""
+    h = yeni_kullanici(f"{uuid.uuid4().hex}@ornek.com")
+    ib = iban("00064", "1112223")  # 00064 = İş Bankası
+    html = (f"<html><body><table><tr><td>IBAN:</td><td>{ib}</td></tr>"
+            "<tr><th>Tarih</th><th>Açıklama</th><th>Tutar</th><th>Bakiye</th></tr>"
+            "<tr><td>01.09.2026</td><td>DENEME TAHSİLAT</td><td>1.000,00</td><td>1.000,00</td></tr>"
+            "<tr><td>02.09.2026</td><td>DENEME ÖDEME</td><td>-250,00</td><td>750,00</td></tr></table></body></html>")
+    r = client.post("/api/ekstre-yukle", files={"dosya": ("HesapOzeti.xls", html.encode("utf-8"), "application/vnd.ms-excel")}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["eklenen"] == 2 and r.json()["hesap"].startswith("İş Bankası")

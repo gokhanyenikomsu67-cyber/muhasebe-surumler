@@ -469,7 +469,7 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
                 db.commit()
             return sonuc
     santiyeler = db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id, Santiye.durum == "aktif")).all()
-    santiye_adlari = [s.ad for s in santiyeler]
+    santiye_adlari = [ad for s in santiyeler for ad in kural.kayit_adlari(s)]  # eski adlar da tanınır
     adi = (dosya.filename or "").lower()
     mime = dosya.content_type or ""
     if adi.endswith(".pdf"):
@@ -793,7 +793,7 @@ def taslak_olustur(db: Session, k: Kullanici, okunan: dict, yon: str, santiyeler
                 return _xml_ile_guncelle(db, mevcut, okunan, santiyeler)
             mevcut._zaten_var = True  # kaydedilmeyen işaret; ekranda "zaten listede" yazar
             return mevcut
-    santiye = next((s for s in santiyeler if s.ad == okunan.get("onerilen_santiye")), None)
+    santiye = next((s for s in santiyeler if kural.adi_bu_mu(s, okunan.get("onerilen_santiye"))), None)
     # Kullanıcının bu firmanın son onaylı faturasında seçtiği gider türü tahminden önce gelir.
     onceki_gider = db.scalar(select(Fatura.gider_turu).where(
         Fatura.sirket_id == k.sirket_id, Fatura.cari_id == cari.id, Fatura.yon == yon, Fatura.durum == "onayli",
@@ -867,7 +867,7 @@ def notlari_ayir(notlar: str | None) -> tuple[list[str], list[str]]:
 
 def _xml_ile_guncelle(db: Session, f: Fatura, okunan: dict, santiyeler) -> Fatura:
     """PDF'ten okunmuş taslağı aynı faturanın XML'iyle düzeltir; kullanıcının seçtiği şantiye/gider türü korunur."""
-    santiye = next((s for s in santiyeler if s.ad == okunan.get("onerilen_santiye")), None)
+    santiye = next((s for s in santiyeler if kural.adi_bu_mu(s, okunan.get("onerilen_santiye"))), None)
     eski_santiyeler = {kl.santiye_id for kl in f.kalemler if kl.santiye_id}
     f.tarih, f.vade = _tarih(okunan.get("tarih")) or f.tarih, _tarih(okunan.get("vade")) or f.vade
     f.santiye_id = f.santiye_id or (santiye.id if santiye else None)

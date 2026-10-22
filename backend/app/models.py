@@ -79,6 +79,7 @@ class Santiye(Base):
     bitis: Mapped[date | None] = mapped_column(Date)
     butce: Mapped[float | None] = mapped_column(Para)
     durum: Mapped[str] = mapped_column(String(20), default="aktif")  # aktif | tamamlandi
+    eski_adlar: Mapped[str | None] = mapped_column(Text)  # ad değişince eski adlar (satır satır); eski adla gelen belge buraya eşlenir
 
 
 class Depo(Base):
@@ -92,6 +93,7 @@ class Depo(Base):
     cari_id: Mapped[int | None] = mapped_column(ForeignKey("cariler.id"))
     aciklama: Mapped[str | None] = mapped_column(Text)
     durum: Mapped[str] = mapped_column(String(20), default="aktif")  # aktif | pasif
+    eski_adlar: Mapped[str | None] = mapped_column(Text)
     santiye: Mapped["Santiye | None"] = relationship()
     cari: Mapped["Cari | None"] = relationship()
 

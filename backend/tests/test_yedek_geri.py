@@ -87,6 +87,17 @@ def test_eski_yedekler_adetle_sinirli_belgeler_bir_kez_saklanir(tmp_path, monkey
     r = yedek.yedek_al()
     with zipfile.ZipFile(tmp_path / "y" / r["dosya"]) as z:
         adlar = set(z.namelist())
-    assert f"belgeler/{yeni.name}" in adlar and f"belgeler/{eski.name}" not in adlar
-    eski.unlink()
+        liste = set(z.read("belgeler.txt").decode().split())
+    # Belgeler ZIP'e değil yedek klasörünün belge deposuna bir kez kopyalanır; ZIP'te yalnız listesi olur
+    assert not any(a.startswith("belgeler/") for a in adlar)
+    assert yeni.name in liste and eski.name not in liste
+    depo = tmp_path / "y" / yedek.BELGE_KLASORU
+    assert (depo / yeni.name).read_bytes() == b"yeni" and not (depo / eski.name).exists()
+    # Dördüncü yedekten sonra en eski yedek silinir; kullanılmayan belge depodan da silinir
     yeni.unlink()
+    for _ in range(3):
+        time.sleep(1.05)
+        yedek.yedek_al()
+    assert len(list((tmp_path / "y").glob("muhasebe-yedek-*.zip"))) == 3
+    assert not (depo / yeni.name).exists()
+    eski.unlink()
