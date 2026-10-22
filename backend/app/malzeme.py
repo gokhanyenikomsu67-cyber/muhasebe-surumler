@@ -11,9 +11,10 @@ from collections import Counter
 from difflib import SequenceMatcher
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from . import kural
+from .hesap import tl_kur
 from .models import Fatura, FaturaKalem, Malzeme
 
 BENZERLIK = 0.85
@@ -41,13 +42,56 @@ def ayni_mi(a: str, b: str) -> bool:
     return bool(a) and _bitisik(a) == _bitisik(b)
 
 
-def benzerlik(a: str, b: str) -> float:
-    """0-1 arası; sayıları farklıysa 0."""
+# Ayırt edici kelimeler: aynı gruptan farklı iki kelime iki ayrı kalem demektir ("Yüksek Kademe" ile "Düşük Kademe").
+_ZIT = [{"yuksek", "dusuk"}, {"alt", "ust"}, {"ic", "ici", "dis", "disi"}, {"sag", "sol"}, {"buyuk", "kucuk"},
+        {"ince", "kalin"}, {"sicak", "soguk"}, {"on", "arka"}, {"giris", "cikis"}, {"gunduz", "gece", "puant"},
+        {"erkek", "dis"}, {"tek", "cift"}, {"acik", "kapali"}, {"ana", "yan"}, {"min", "max", "maks"},
+        {"beyaz", "siyah", "gri", "kirmizi", "mavi", "yesil", "sari", "kahverengi", "turuncu", "mor"},
+        {"aktif", "reaktif"}, {"alis", "satis"}, {"dikey", "yatay"}, {"yeni", "eski"}, {"kisa", "uzun"},
+        {"ilk", "son"}, {"tam", "yarim"}, {"erkek", "kadin"}, {"bay", "bayan"}]
+_AYIRT_EDICI = set().union(*_ZIT)
+
+
+def _kelime_esi(x: str, y: str) -> bool:
+    """İki kelime aynı mı: aynı, kısaltma ("nak" = "nakliye") ya da harf hatası ("cimento" ~ "cimentu")."""
+    if x == y:
+        return True
+    if x in _AYIRT_EDICI or y in _AYIRT_EDICI or x.isdigit() or y.isdigit():
+        return False
+    kisa, uzun = sorted((x, y), key=len)
+    if len(kisa) >= 3 and uzun.startswith(kisa):
+        return True
+    return len(kisa) >= 4 and SequenceMatcher(None, x, y).ratio() >= 0.8
+
+
+def karsilastir(a: str, b: str) -> tuple[float, bool, list[str]]:
+    """(benzerlik 0-1, güçlü mü, yalnız birinde geçen kelimeler). Sayıları farklı ya da zıt kelimeli (yüksek/düşük)
+    adlar benzer değildir (0). Güçlü: bütün kelimeler karşılıklı eşleşiyor (sıra, kısaltma, harf hatası farkı);
+    bir tarafta fazladan kelime varsa ("KONAKLAMA" / "ODA KONAKLAMA") güçlü değildir, kullanıcı bakmalıdır."""
     if not a or not b or _sayilar(a) != _sayilar(b):
-        return 0.0
-    if sorted(a.split()) == sorted(b.split()):
-        return 0.99
-    return SequenceMatcher(None, _bitisik(a), _bitisik(b)).ratio()
+        return 0.0, False, []
+    ka, kb = a.split(), b.split()
+    kalan = list(kb)
+    fazla_a = []
+    for x in ka:
+        es = next((y for y in kalan if _kelime_esi(x, y)), None)
+        if es is None:
+            fazla_a.append(x)
+        else:
+            kalan.remove(es)
+    farklar = fazla_a + kalan
+    if any(len(g & set(fazla_a)) and len(g & set(kalan)) and (g & set(fazla_a)) != (g & set(kalan)) for g in _ZIT):
+        return 0.0, False, farklar
+    oran = SequenceMatcher(None, _bitisik(a), _bitisik(b)).ratio()
+    harfli = any(not x.isdigit() and not re.fullmatch(r"[\d.x]+", x) for x in ka)
+    if not farklar and harfli:
+        return max(oran, 0.95), True, []
+    return (oran if oran >= BENZERLIK else 0.0), False, farklar
+
+
+def benzerlik(a: str, b: str) -> float:
+    """0-1 arası; sayıları farklı ya da zıt kelimeliyse 0."""
+    return karsilastir(a, b)[0]
 
 
 def kart_adlari(m: Malzeme) -> list[str]:
@@ -81,43 +125,54 @@ class Dizin:
     def bul(self, ad: str | None) -> Malzeme | None:
         return self.tam.get(_bitisik(anahtar(ad)))
 
-    def benzerler(self, ad: str, adet: int = 5) -> list[tuple[float, Malzeme]]:
+    def benzerler(self, ad: str, adet: int = 5) -> list[tuple[float, bool, list[str], Malzeme]]:
+        """Benzer kartlar, güçlü öneriler önce: (benzerlik, güçlü mü, farklı kelimeler, kart)."""
         a = anahtar(ad)
-        en_iyi: dict[int, tuple[float, Malzeme]] = {}
+        en_iyi: dict[int, tuple] = {}
         for b, m in self.sayiya_gore.get(_sayilar(a), []):
-            if SequenceMatcher(None, _bitisik(a), _bitisik(b)).quick_ratio() < BENZERLIK and sorted(a.split()) != sorted(b.split()):
+            if SequenceMatcher(None, _bitisik(a), _bitisik(b)).quick_ratio() < 0.6:
                 continue
-            o = benzerlik(a, b)
-            if o >= BENZERLIK and o > en_iyi.get(m.id, (0, None))[0]:
-                en_iyi[m.id] = (o, m)
-        return sorted(en_iyi.values(), key=lambda t: -t[0])[:adet]
+            o, guclu, farklar = karsilastir(a, b)
+            if o and (m.id not in en_iyi or (guclu, o) > (en_iyi[m.id][1], en_iyi[m.id][0])):
+                en_iyi[m.id] = (o, guclu, farklar, m)
+        return sorted(en_iyi.values(), key=lambda t: (not t[1], -t[0]))[:adet]
 
 
 def onayli_kalemler(db: Session, sirket_id: int):
-    return db.scalars(select(FaturaKalem).join(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.durum == "onayli"))
+    return db.scalars(select(FaturaKalem).join(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.durum == "onayli")
+                      .options(joinedload(FaturaKalem.fatura).joinedload(Fatura.cari)))
+
+
+def _kalem_ozeti(k: FaturaKalem) -> dict:
+    f = k.fatura
+    kur = tl_kur(f)
+    miktar = float(k.miktar or 0)
+    return {"fatura_id": f.id, "fatura_no": f.fatura_no, "tarih": f.tarih, "yon": f.yon,
+            "cari": f.cari.unvan if f.cari else None, "miktar": miktar, "birim": k.birim,
+            "birim_fiyat": round(float(k.tutar or 0) * kur / miktar, 4) if miktar else None,
+            "tutar": round(float(k.tutar or 0) * kur, 2)}
 
 
 def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
     """Onaylı faturaların kalem adlarını kartlara bağlar: karta benzemeyen ada kendiliğinden kart açar; bir karta
-    benzeyenleri (kullanıcıya sorulacak) döndürür: [{ad, kalem_sayisi, oneriler: [{id, ad, benzerlik}]}]."""
+    benzeyenleri (kullanıcıya sorulacak) kalemleriyle döndürür:
+    [{ad, kalem_sayisi, kalemler: [...], oneriler: [{id, ad, benzerlik, guclu, farklar, birim, ortalama_fiyat}]}]."""
     dizin = Dizin(list(db.scalars(select(Malzeme).where(Malzeme.sirket_id == sirket_id).order_by(Malzeme.id))))
-    sayac: Counter = Counter()
-    ilk_yazilis: dict[str, str] = {}
-    for kalem in onayli_kalemler(db, sirket_id):
+    kalemler = list(onayli_kalemler(db, sirket_id))
+    gruplar: dict[str, list[FaturaKalem]] = {}
+    for kalem in kalemler:
         a = _bitisik(anahtar(kalem.aciklama))
         if a and a not in dizin.tam:
-            sayac[a] += 1
-            ilk_yazilis.setdefault(a, " ".join((kalem.aciklama or "").split()))
-    bekleyen = []
+            gruplar.setdefault(a, []).append(kalem)
+    sorulacak = []
     # En çok geçen yazılış önce: kart onun adıyla açılır, azınlık yazılışlar ona benzer diye sorulur
-    for a, n in sorted(sayac.items(), key=lambda t: (-t[1], t[0])):
-        ad = ilk_yazilis[a]
+    for a, grup in sorted(gruplar.items(), key=lambda t: (-len(t[1]), t[0])):
+        ad = " ".join((grup[0].aciklama or "").split())
         if dizin.bul(ad):
             continue
         oneriler = dizin.benzerler(ad)
         if oneriler:
-            bekleyen.append({"ad": ad, "kalem_sayisi": n,
-                             "oneriler": [{"id": m.id, "ad": m.ad, "benzerlik": round(o, 2)} for o, m in oneriler]})
+            sorulacak.append((ad, grup, oneriler))
             continue
         m = Malzeme(sirket_id=sirket_id, ad=ad[:255])
         db.add(m)
@@ -125,4 +180,28 @@ def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
         dizin.kartlar.append(m)
         dizin.ekle(m)
     db.commit()
+    if not sorulacak:
+        return dizin, []
+    # Önerilen kartın birimi ve ortalama fiyatı (kullanıcı karşılaştırsın)
+    istenen = {m.id for _, _, o in sorulacak for *_, m in o}
+    ozet: dict[int, dict] = {}
+    for kalem in kalemler:
+        m = dizin.bul(kalem.aciklama)
+        if m and m.id in istenen:
+            x = _kalem_ozeti(kalem)
+            o = ozet.setdefault(m.id, {"birimler": Counter(), "miktar": 0.0, "tutar": 0.0, "sayi": 0})
+            o["birimler"][x["birim"] or "-"] += 1
+            o["miktar"] += x["miktar"]
+            o["tutar"] += x["tutar"]
+            o["sayi"] += 1
+    bekleyen = []
+    for ad, grup, oneriler in sorulacak:
+        liste = []
+        for o, guclu, farklar, m in oneriler:
+            st = ozet.get(m.id) or {"birimler": Counter(), "miktar": 0, "tutar": 0, "sayi": 0}
+            liste.append({"id": m.id, "ad": m.ad, "benzerlik": round(o, 2), "guclu": guclu, "farklar": farklar,
+                          "birim": st["birimler"].most_common(1)[0][0] if st["birimler"] else None, "kalem_sayisi": st["sayi"],
+                          "ortalama_fiyat": round(st["tutar"] / st["miktar"], 2) if st["miktar"] else None})
+        bekleyen.append({"ad": ad, "kalem_sayisi": len(grup), "oneriler": liste,
+                         "kalemler": sorted((_kalem_ozeti(k) for k in grup), key=lambda x: x["tarih"], reverse=True)})
     return dizin, bekleyen

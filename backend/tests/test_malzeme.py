@@ -27,6 +27,13 @@ def test_anahtar_ve_benzerlik():
     assert malzeme.benzerlik(a("İNCE KUM"), a("KUM İNCE")) > 0.9
     assert malzeme.benzerlik(a("PORTLAND ÇİMENTOSU 50 KG"), a("PORTLAND CIMENTO 50 KG")) >= malzeme.BENZERLIK
     assert malzeme.benzerlik(a("Çimento"), a("Kireç")) < malzeme.BENZERLIK
+    k = malzeme.karsilastir
+    # Zıt kelimeli adlar benzer sayılmaz; fazladan kelimesi olan öneri güçlü değil (kullanıcı kontrol eder)
+    assert k(a("Yüksek Kademe Enerji Tüketim Bedeli"), a("Düşük Kademe Enerji Tüketim Bedeli"))[0] == 0
+    assert k(a("Daire Tablosu"), a("Daire İçi Tablosu"))[1:] == (False, ["ici"])
+    assert k(a("KONAKLAMA"), a("ODA - KONAKLAMA"))[1:] == (False, ["oda"])
+    # Sıra ve kısaltma farkı güçlü öneri
+    assert k(a("500 gr çekiç"), a("Çekiç 500 gr"))[1] and k(a("Deneme Şehir NAK BEDELİ"), a("Deneme Şehir nakliye bedeli"))[1]
 
 
 def test_benzer_adlar_sorulur_karar_hatirlanir_rapor_toplar():
@@ -42,6 +49,9 @@ def test_benzer_adlar_sorulur_karar_hatirlanir_rapor_toplar():
     # Yazılışı aynı olan kendiliğinden aynı kart; benzer olan sorulur; ölçüsü farklı kablo ayrı kart
     bekleyen = client.get("/api/malzemeler/bekleyen", headers=h).json()
     assert [(b["ad"], b["oneriler"][0]["ad"]) for b in bekleyen] == [("PORTLAND CIMENTO 50 KG", "PORTLAND ÇİMENTOSU 50 KG")]
+    b = bekleyen[0]
+    assert b["oneriler"][0]["guclu"] and b["oneriler"][0]["birim"] == "adet" and b["oneriler"][0]["ortalama_fiyat"] == round(1550 / 15, 2)
+    assert [(x["cari"], x["miktar"], x["birim_fiyat"]) for x in b["kalemler"]] == [("Deneme Hırdavat", 20, 95)]
     kartlar = {m["ad"] for m in client.get("/api/malzemeler", headers=h).json()}
     assert kartlar == {"PORTLAND ÇİMENTOSU 50 KG", "NYY 3x2,5 KABLO", "NYY 3x4 KABLO"}
     rapor = client.get("/api/raporlar/malzeme", headers=h).json()["ozet"]

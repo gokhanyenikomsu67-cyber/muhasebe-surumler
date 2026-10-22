@@ -787,6 +787,10 @@ function virmanRaporuAc() {
 // ---------------------------------------------------------------- malzemeler
 // Faturalarda biraz farklı yazılmış aynı malzeme tek kartta toplanır; benzer adlar toplu sorulur.
 function malzemeEslestirmeAc() {
+  // Satır başına seçim ve önerilen kart (ekran yenilense de korunur); güçlü öneriler işaretli gelir
+  const secili = new Map(), hedef = new Map(), acik = new Set();
+  const filtre = { arama: "", tur: "" };
+  let ilk = true;
   sekmeAc("malzeme-eslestirme", "Benzer Malzemeler", {
     async ciz(el) {
       let bekleyen;
@@ -797,46 +801,89 @@ function malzemeEslestirmeAc() {
           h("button", { class: "dugme", onclick: () => malzemeRaporuAc("gelen") }, "Malzeme Bazlı Alışlar"));
         return durum("Benzer malzeme adı yok");
       }
-      const secimler = bekleyen.map((b) => h("select", {},
-        [...b.oneriler.map((o, i) => [o.id, `${o.ad}${i === 0 ? " (önerilen)" : ""}`]), ["", "Ayrı malzeme (yeni kart aç)"]]
-          .map(([d, m], i) => h("option", { value: d, selected: i === 0 }, m))));
-      const uygula = async (hepsiAyri) => {
-        const kararlar = bekleyen.map((b, i) => ({ ad: b.ad, malzeme_id: hepsiAyri ? null : Number(secimler[i].value) || null }));
+      for (const b of bekleyen) {
+        if (!hedef.has(b.ad)) hedef.set(b.ad, String(b.oneriler[0].id));
+        if (!secili.has(b.ad)) secili.set(b.ad, ilk && b.oneriler[0].guclu);
+      }
+      ilk = false;
+      const oneri = (b) => b.oneriler.find((o) => String(o.id) === hedef.get(b.ad));
+      const uyan = (b) => {
+        const o = oneri(b);
+        if (filtre.tur === "guclu" && !o?.guclu) return false;
+        if (filtre.tur === "kontrol" && o?.guclu) return false;
+        const k = aramaAnahtari(filtre.arama).split(" ").filter(Boolean);
+        const metin = aramaAnahtari([b.ad, o?.ad, ...b.kalemler.map((x) => `${x.cari || ""} ${x.fatura_no || ""}`)].join(" "));
+        return k.every((x) => metin.includes(x));
+      };
+      const gorunen = bekleyen.filter(uyan);
+      const sayi = (v, b) => (v == null ? "" : `${Number(v).toLocaleString("tr-TR", { maximumFractionDigits: 3 })}${b ? " " + b : ""}`);
+      const uygula = async (ayri) => {
+        const secilen = bekleyen.filter((b) => secili.get(b.ad) && (uyan(b)));
+        if (!secilen.length) return bildir("Önce satır seçin.", true);
+        if (ayri && !confirm(`Seçilen ${secilen.length} ad ayrı malzeme olarak açılsın mı?`)) return;
+        const kararlar = secilen.map((b) => ({ ad: b.ad, malzeme_id: ayri || hedef.get(b.ad) === "" ? null : Number(hedef.get(b.ad)) }));
         try {
           const r = await api("/api/malzemeler/esle", { metod: "POST", veri: { kararlar } });
           bildir(`${r.eslenen} ad var olan malzemeye işlendi${r.ayri ? `, ${r.ayri} ayrı malzeme açıldı` : ""}.`);
-          listeyiTazele("malzeme-kartlari");
-          listeyiTazele("rapor-malzeme-gelen");
-          listeyiTazele("rapor-malzeme-giden");
+          secilen.forEach((b) => { secili.delete(b.ad); hedef.delete(b.ad); });
+          ["malzeme-kartlari", "rapor-malzeme-gelen", "rapor-malzeme-giden"].forEach(listeyiTazele);
           yenidenCiz();
         } catch (e) { bildir(e.message, true); }
       };
+      const tumu = h("input", { type: "checkbox", checked: gorunen.length && gorunen.every((b) => secili.get(b.ad)),
+        onchange: (e) => { gorunen.forEach((b) => secili.set(b.ad, e.target.checked)); yenidenCiz(); } });
+      const kalemHucreleri = (x) => [h("td", {}, x.cari || ""), h("td", {}, x.fatura_no || ""), h("td", {}, tarih(x.tarih)),
+        h("td", { class: "sayi" }, sayi(x.miktar)), h("td", {}, x.birim || ""), h("td", { class: "sayi" }, x.birim_fiyat != null ? para(x.birim_fiyat) : "")];
+      const govde = [];
+      for (const b of gorunen) {
+        const o = oneri(b);
+        const ilkK = b.kalemler[0];
+        const sec = h("select", { onchange: (e) => { hedef.set(b.ad, e.target.value); if (e.target.value === "") secili.set(b.ad, true); yenidenCiz(); } },
+          [...b.oneriler.map((x) => [String(x.id), `${x.ad}${x.guclu ? "" : " (kontrol edin)"}`]), ["", "Ayrı malzeme (yeni kart aç)"]]
+            .map(([d, m]) => h("option", { value: d, selected: d === hedef.get(b.ad) }, m)));
+        govde.push(h("tr", { class: o && !o.guclu ? "uyari-satir" : "" },
+          h("td", {}, h("input", { type: "checkbox", checked: !!secili.get(b.ad), onchange: (e) => { secili.set(b.ad, e.target.checked); tumu.checked = gorunen.every((x) => secili.get(x.ad)); } })),
+          h("td", { style: "white-space:normal;min-width:180px" }, b.ad,
+            b.kalemler.length > 1 ? h("a", { href: "#", style: "display:block;font-size:12px", onclick: (e) => { e.preventDefault(); acik.has(b.ad) ? acik.delete(b.ad) : acik.add(b.ad); yenidenCiz(); } },
+              `${acik.has(b.ad) ? "▾" : "▸"} ${b.kalemler.length} kalem`) : ""),
+          ...kalemHucreleri(ilkK),
+          h("td", { style: "min-width:220px" }, sec,
+            o ? h("div", { style: "font-size:12px;color:#4a5866" },
+              [o.birim ? `birimi ${o.birim}` : "", o.ortalama_fiyat != null ? `ort. fiyat ${para(o.ortalama_fiyat)}` : "", o.kalem_sayisi ? `${o.kalem_sayisi} kalem` : ""].filter(Boolean).join(" · "),
+              !o.guclu && o.farklar.length ? h("div", { style: "color:#8a6100" }, `Farklı kelime: ${o.farklar.join(", ")}`) : "") : ""),
+          h("td", { class: "sayi" }, o ? `%${Math.round(o.benzerlik * 100)}` : "")));
+        if (acik.has(b.ad)) for (const x of b.kalemler.slice(1)) govde.push(h("tr", {}, h("td", {}), h("td", {}), ...kalemHucreleri(x), h("td", {}), h("td", {})));
+      }
+      const secilenSayi = bekleyen.filter((b) => secili.get(b.ad) && uyan(b)).length;
       el.append(
-        ACIKLAMA("Bu adlar kayıtlı bir malzemeye çok benziyor. Hangi malzemeye işleneceğini seçin; ayrı bir malzemeyse \"Ayrı malzeme\" seçin. Kararınız hatırlanır, aynı ad bir daha sorulmaz. Faturadaki kalem adı değişmez."),
+        ACIKLAMA("Bu kalem adları kayıtlı bir malzemeye benziyor. Kesin benzeyenler işaretli gelir; sarı satırlarda adlar arasında farklı kelime var, kontrol edin. Önerilen malzemeyi değiştirebilir ya da \"Ayrı malzeme\" seçebilirsiniz. Kararınız hatırlanır; faturadaki kalem adı değişmez. İşaretlenmeyenler listede kalır."),
+        h("div", { class: "liste-ust", style: "flex-wrap:wrap" },
+          h("input", { type: "search", placeholder: "Ara (ad, firma, fatura no)…", value: filtre.arama, style: "min-width:240px",
+            onchange: (e) => { filtre.arama = e.target.value; yenidenCiz(); } }),
+          h("select", { onchange: (e) => { filtre.tur = e.target.value; yenidenCiz(); } },
+            [["", `Tümü (${bekleyen.length})`], ["guclu", `Kesin benzeyenler (${bekleyen.filter((b) => b.oneriler[0].guclu).length})`],
+              ["kontrol", "Kontrol edilmesi gerekenler"]].map(([d, m]) => h("option", { value: d, selected: d === filtre.tur }, m))),
+          h("button", { class: "dugme ana", onclick: () => uygula(false) }, `Seçilenleri eşleştir (${secilenSayi})`),
+          h("button", { class: "dugme", onclick: () => uygula(true) }, "Seçilenleri ayrı malzeme yap")),
         h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
-          h("thead", {}, h("tr", {}, ["Faturadaki ad", "Kalem sayısı", "Hangi malzemeye işlensin?"].map((b) => h("th", {}, b)))),
-          h("tbody", {}, bekleyen.map((b, i) => h("tr", {}, h("td", { style: "white-space:normal" }, b.ad), h("td", { class: "sayi" }, b.kalem_sayisi), h("td", {}, secimler[i])))))),
-        h("div", { style: "display:flex;gap:8px;margin-top:10px" },
-          h("button", { class: "dugme ana", onclick: () => uygula(false) }, "Seçilenlerle uygula"),
-          h("button", { class: "dugme", onclick: () => { if (confirm("Hepsi ayrı malzeme olarak açılsın mı?")) uygula(true); } }, "Hepsinde ayrı malzeme")));
-      durum(`${bekleyen.length} benzer ad onay bekliyor`);
+          h("thead", {}, h("tr", {}, h("th", {}, tumu), ...["Faturadaki ad", "Firma", "Fatura No", "Tarih", "Miktar", "Birim", "Birim Fiyat", "İşlenecek malzeme", "Benzerlik"]
+            .map((x, i) => h("th", { class: [4, 6, 8].includes(i) ? "sayi" : "" }, x)))),
+          h("tbody", {}, govde))));
+      durum(`${bekleyen.length} benzer ad onay bekliyor${gorunen.length !== bekleyen.length ? `, ${gorunen.length} gösteriliyor` : ""}`);
     },
     yenile: () => yenidenCiz(),
   });
 }
 
-// Fatura onayından sonra: benzer malzeme adı varsa bir kez sorar (sayı değişmedikçe aynı oturumda tekrar sormaz).
+// Fatura onayından sonra: benzer malzeme adı varsa listeyi açar (liste değişmedikçe aynı oturumda tekrar açmaz).
 async function benzerMalzemeKontrol() {
   let bekleyen;
   try { bekleyen = await api("/api/malzemeler/bekleyen"); } catch { return; }
   const anahtar = bekleyen.map((b) => b.ad).join("|");
   if (!bekleyen.length || benzerMalzemeKontrol.sorulan === anahtar) return;
   benzerMalzemeKontrol.sorulan = anahtar;
-  const sec = await secimSor("Benzer malzeme adları var",
-    h("div", {}, `${bekleyen.length} kalem adı kayıtlı bir malzemeye benziyor`, h("ul", {}, bekleyen.slice(0, 5).map((b) => h("li", {}, `${b.ad} → ${b.oneriler[0].ad}`))),
-      bekleyen.length > 5 ? `ve ${bekleyen.length - 5} ad daha.` : "", " Şimdi eşleştirelim mi?"),
-    [["evet", "Eşleştir", true], [null, "Sonra"]]);
-  if (sec === "evet") malzemeEslestirmeAc();
+  bildir(`${bekleyen.length} kalem adı kayıtlı bir malzemeye benziyor; listeden kontrol edip eşleştirin.`);
+  malzemeEslestirmeAc();
 }
 
 function malzemeRaporuAc(yon = "gelen") {
