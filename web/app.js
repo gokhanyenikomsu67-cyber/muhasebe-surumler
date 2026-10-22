@@ -2569,6 +2569,50 @@ function topluCekAc(yon = "alinan") {
   const sakla = () => { try { localStorage.setItem(anahtar(), JSON.stringify(satirlar)); } catch { /* depolama kapalı */ } };
   yukle();
   let secenekler = { cariler: [], santiyeler: [], hesaplar: [] };
+  const cariIstegi = (x) => ({ yon, tutar: sayiCoz(x.tutar), vade: tarihCoz(x.vade), kesideci: x.kesideci || null,
+    kesideci_vkn: x.kesideci_vkn || null, lehtar: x.lehtar || null, cari_id: x.cari_id || null,
+    cari_unvan: x.cari_id ? null : x.cari_unvan || null, cari_vkn: x.cari_vkn || null });
+  const KARAR_ANAHTARI = "cek-cari-kararlari";
+  const kararlar = () => { try { return JSON.parse(localStorage.getItem(KARAR_ANAHTARI) || "{}"); } catch { return {}; } };
+  const benzerCarileriSor = async (gidecek) => {
+    let sonuc;
+    try { sonuc = await api("/api/cekler/cari-durumu", { metod: "POST", veri: { satirlar: gidecek.map(cariIstegi) } }); }
+    catch (e) { bildir(e.message, true); return false; }
+    const eski = kararlar();
+    const gruplar = new Map();  // Excel'deki ad -> { ad, benzer, satirlar }
+    gidecek.forEach((x, i) => {
+      const d = sonuc[i];
+      if (d?.durum !== "yeni" || !d.benzer.length || x._yeniCari) return;
+      const k = aramaAnahtari(d.unvan);
+      const onceki = eski[k];
+      if (onceki === "yeni") { x._yeniCari = true; return; }
+      const b = d.benzer.find((b) => b.id === onceki);
+      if (b) { x.cari_id = b.id; x.cari_unvan = b.unvan; return; }
+      if (!gruplar.has(k)) gruplar.set(k, { ad: d.unvan, benzer: d.benzer, satirlar: [] });
+      gruplar.get(k).satirlar.push(x);
+    });
+    if (!gruplar.size) return true;
+    const seciciler = [...gruplar.values()].map((g) => [g, h("select", {}, [...g.benzer.map((b) => [String(b.id), `Kayıtlı: ${b.unvan}`]), ["yeni", `Yeni cari aç: ${g.ad}`]]
+      .map(([d, m]) => h("option", { value: d }, m)))]);
+    const icerik = h("div", {}, h("p", {}, `${gruplar.size} adın kayıtlı bir cariye benzeyeni var. Hepsinde önerilen kayıtlı cari seçili; farklı olanı değiştirin.`),
+      h("div", { style: "max-height:55vh;overflow:auto" }, h("table", { class: "liste" },
+        h("thead", {}, h("tr", {}, ["Çekteki ad", "Çek", "İşlenecek cari"].map((b) => h("th", {}, b)))),
+        h("tbody", {}, seciciler.map(([g, sel]) => h("tr", {}, h("td", {}, g.ad), h("td", { class: "sayi" }, g.satirlar.length), h("td", {}, sel)))))));
+    const cevap = await secimSor("Benzer cariler", icerik, [["uygula", "Seçilenlerle kaydet", true], ["yeni", "Hepsinde yeni cari aç"], [null, "Vazgeç"]]);
+    if (!cevap) return false;
+    const yeniKararlar = kararlar();
+    for (const [g, sel] of seciciler) {
+      const deger = cevap === "yeni" ? "yeni" : sel.value;
+      const b = g.benzer.find((b) => String(b.id) === deger);
+      for (const x of g.satirlar) {
+        if (b) { x.cari_id = b.id; x.cari_unvan = b.unvan; } else x._yeniCari = true;
+      }
+      yeniKararlar[aramaAnahtari(g.ad)] = b ? b.id : "yeni";
+    }
+    try { localStorage.setItem(KARAR_ANAHTARI, JSON.stringify(yeniKararlar)); } catch { /* depolama kapalı */ }
+    sakla();
+    return true;
+  };
   const s = sekmeAc("toplu-cek", "Toplu Çek Girişi", {
     async ciz(el) {
       secenekler = await tumSecenekler().catch(() => secenekler);
@@ -2651,13 +2695,38 @@ function topluCekAc(yon = "alinan") {
           h("td", { class: "sayi" }, i + 1),
           ...TOPLU_CEK_ALANLARI.map((t) => hucre(x, t)),
           h("td", { class: "akibet-hucre" }, akibetSecici(yon, (x.akibet ||= {}), secenekler, sakla)),
-          h("td", { class: "toplu-sorun" }, x.sorun ? h("span", { class: "negatif" }, x.sorun) : x.dosya_adi ? h("span", { class: "ipucu" }, x.dosya_adi) : ""),
+          h("td", { class: "toplu-sorun" }, x.sorun ? h("span", { class: "negatif" }, x.sorun) : x.dosya_adi ? h("span", { class: "ipucu" }, x.dosya_adi) : "",
+            h("div", { class: "cari-durum", "data-id": x._id })),
           h("td", { class: "satir-dugmeler" },
             x.belirsiz?.length ? h("button", { type: "button", class: "dugme kucuk onay-tik", title: "Bu satırdaki bütün kırmızı alanları onayla",
               onclick: () => { satiriOnayla(x); sakla(); ciz(); } }, "✓ Tümü") : "",
             h("button", { type: "button", class: "dugme kucuk", title: "Satırı çıkar",
               onclick: () => { satirlar.splice(i, 1); sakla(); ciz(); } }, "✕")))));
         tazeleOzet();
+        cariDurumlari();
+      };
+      // Her satırda hangi cariye işleneceği: kayıtlı cari (yeşil) ya da yeni açılacak (sarı) + benzer kayıtlı cari önerisi
+      let cariSayac = 0;
+      const cariDurumlari = async () => {
+        const no = ++cariSayac;
+        const dolu = satirlar.filter((x) => doluMu(x) && !x._kaydedildi);
+        if (!dolu.length) return;
+        let sonuc;
+        try {
+          sonuc = await api("/api/cekler/cari-durumu", { metod: "POST", veri: { satirlar: dolu.map(cariIstegi) } });
+        } catch { return; }
+        if (no !== cariSayac) return;  // bu arada tablo yeniden çizildi
+        dolu.forEach((x, i) => {
+          const kap = govde.querySelector(`.cari-durum[data-id="${x._id}"]`);
+          const d = sonuc[i];
+          if (!kap || !d) return;
+          if (d.durum === "kayitli") return kap.replaceChildren(h("span", { class: "cari-kayitli", title: "Bu cariye işlenecek" }, `Kayıtlı cari: ${d.unvan}`));
+          if (d.durum === "yok") return kap.replaceChildren(h("span", { class: "ipucu" }, "Cari belli değil"));
+          const oneriler = x._yeniCari ? [] : d.benzer.map((b) => h("button", { type: "button", class: "dugme kucuk", title: `${d.unvan} yerine ${b.unvan} carisine işle`,
+            onclick: () => { x.cari_id = b.id; x.cari_unvan = b.unvan; sakla(); ciz(); } }, `Bu mu? ${b.unvan}`));
+          kap.replaceChildren(h("span", { class: "cari-yeni", title: "Kaydedince bu adla yeni cari açılır" }, `Yeni cari açılacak: ${d.unvan}`), ...oneriler,
+            oneriler.length ? h("button", { type: "button", class: "dugme kucuk", onclick: () => { x._yeniCari = true; sakla(); ciz(); } }, "Hayır, yeni aç") : "");
+        });
       };
       const ekle = (yeni) => {
         satirlar = satirlar.filter(doluMu).concat(yeni.map((x) => yeniSatir({ ...x, santiye_ad: x.santiye_ad ?? null })));
@@ -2800,14 +2869,10 @@ function topluCekAc(yon = "alinan") {
       if (!gidecek.length) return bildir(yalnizSecili ? "Kaydedilecek satır seçin." : "Tabloda kaydedilecek çek yok.", true);
       const onaysiz = gidecek.filter((x) => x.belirsiz?.length);
       if (onaysiz.length && !confirm(`${onaysiz.length} çekte onaylanmamış kırmızı alan var (${onaysiz.map((x) => x.cek_no || "?").slice(0, 6).join(", ")}${onaysiz.length > 6 ? "…" : ""}).\n\nKırmızı alanları çekle karşılaştırıp ✓ ile onaylamanız önerilir. Yine de kaydedilsin mi?`)) return;
-      // Cari sütunu yok: sunucu alınan çekte çeki yazan firmayı, verilen çekte lehtarı cari yapar. Excel şablonunda
-      // Cari yazılmış ve listede olmayan adlar için benzer cari varsa sorulur
-      const bilinmeyen = [...new Map(gidecek.filter((x) => !x.cari_id && x.cari_unvan).map((x) => [aramaAnahtari(x.cari_unvan), x])).values()];
-      for (const x of bilinmeyen) {
-        const b = await benzerCariKontrol(x.cari_unvan, x.cari_vkn);
-        if (!b) return;
-        if (b !== "yeni") for (const y of gidecek) if (aramaAnahtari(y.cari_unvan) === aramaAnahtari(x.cari_unvan)) { y.cari_id = b.id; y.cari_unvan = b.unvan; }
-      }
+      // Cari sütunu yok: sunucu alınan çekte çeki yazan firmayı, verilen çekte lehtarı (ya da Excel'deki Cari'yi) cari yapar.
+      // Kayıtlı olmayıp adı kayıtlı bir cariye benzeyenler tek pencerede sorulur; karar aynı addaki bütün satırlara
+      // uygulanır ve hatırlanır (sonraki yüklemede sorulmaz).
+      if (!(await benzerCarileriSor(gidecek))) return;
       // Listede olmayan şantiye adları kayıttan önce açılır (aynı ad varsa sunucu var olanı verir)
       for (const x of gidecek.filter((x) => !x.santiye_id && x.santiye_ad)) {
         try {

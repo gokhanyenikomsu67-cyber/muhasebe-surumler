@@ -258,3 +258,6 @@ table.liste tr.tiklanir { cursor: pointer; }
 .red-kutu { flex-wrap: wrap; background: #fdecea; border: 1px solid #e3a59f; padding: 8px; border-radius: 4px; margin: 6px 0; }
 .red-kutu .tablo-kap { flex-basis: 100%; }
 .alt-sekmeler { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; border-bottom: 1px solid var(--gri-kenar); padding-bottom: 6px; }
+.cari-durum { font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cari-kayitli { color: var(--yesil); }
+.cari-yeni { background: var(--uyari); padding: 0 4px; border-radius: 3px; }

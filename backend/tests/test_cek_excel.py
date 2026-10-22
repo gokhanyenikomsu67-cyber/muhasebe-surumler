@@ -53,3 +53,17 @@ def test_verilen_cekte_lehtar_bossa_cari_unvan():
     s = client.post("/api/excel/cekler/onizle?yon=verilen", files={"dosya": ("c.xlsx", veri)}, headers=h).json()["satirlar"]
     assert (s[0]["lehtar"], s[0]["cari_unvan"], s[0]["santiye_ad"], s[0]["aciklama"]) == ("ÖRNEK ELEKTRİK", "ÖRNEK ELEKTRİK", None, "PANO İŞİ")
     assert "lehtar" not in s[0]["belirsiz"]
+
+
+def test_toplu_cekte_cari_durumu_kayitli_yeni_benzer():
+    r = client.post("/api/kayit", json={"sirket_unvan": "DENEME", "ad": "x", "eposta": f"{uuid.uuid4().hex}@ornek.com", "sifre": "gizli123"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    kayitli = client.post("/api/cariler", json={"unvan": "ÖRNEK YAPI LTD ŞTİ"}, headers=h).json()
+    benzer = client.post("/api/cariler", json={"unvan": "ÖRNEK ENERJİ"}, headers=h).json()
+    satirlar = [{"yon": "alinan", "kesideci": "Örnek Yapı Ltd. Şti."}, {"yon": "alinan", "kesideci": "ÖRNEK ENERJİ ÇELİK SANAYİ"},
+                {"yon": "verilen", "lehtar": "DENEME LTD"}, {"yon": "verilen", "lehtar": "YEPYENİ FİRMA"}]
+    d = client.post("/api/cekler/cari-durumu", json={"satirlar": satirlar}, headers=h).json()
+    assert (d[0]["durum"], d[0]["cari_id"]) == ("kayitli", kayitli["id"])  # ekler yok sayılır, var olana işlenir
+    assert d[1]["durum"] == "yeni" and d[1]["benzer"][0]["id"] == benzer["id"]
+    assert d[2]["durum"] == "yok"  # lehtar firmamızsa cari belli değil
+    assert (d[3]["durum"], d[3]["benzer"]) == ("yeni", [])

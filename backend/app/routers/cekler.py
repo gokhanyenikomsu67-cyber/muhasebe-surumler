@@ -494,6 +494,49 @@ class TopluCek(BaseModel):
     satirlar: list[TopluCekSatiri]
 
 
+def _satir_carisi(r: TopluCekSatiri, sirket: Sirket | None) -> tuple[str | None, str | None]:
+    """Satırın carisi (ad, VKN): yazılmışsa o; yoksa alınan çekte çeki yazan firma, verilen çekte lehtar."""
+    if r.cari_unvan or r.cari_vkn:
+        return r.cari_unvan, r.cari_vkn
+    if r.yon == "alinan":
+        return r.kesideci, r.kesideci_vkn
+    if r.lehtar and not kural.kendi_unvani_mi(r.lehtar, sirket.unvan if sirket else None):
+        return r.lehtar, None
+    return None, None
+
+
+class CariDurumuIstegi(BaseModel):
+    satirlar: list[TopluCekSatiri]
+
+
+@router.post("/cari-durumu")
+def cari_durumu(istek: CariDurumuIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
+    """Toplu girişte her satırın hangi cariye işleneceği: kayıtlı cari (VKN ya da aynı ad, ekler yok sayılır),
+    yoksa yeni açılacak; adı benzeyen kayıtlı cariler öneri olarak döner ("Bu mu?")."""
+    from .temel import benzer_cariler
+    sirket = db.get(Sirket, k.sirket_id)
+    sonuc = []
+    for r in istek.satirlar:
+        if r.cari_id and (c := db.get(Cari, r.cari_id)) is not None and c.sirket_id == k.sirket_id:
+            sonuc.append({"durum": "kayitli", "cari_id": c.id, "unvan": c.unvan, "benzer": []})
+            continue
+        unvan, vkn = _satir_carisi(r, sirket)
+        vkn = re.sub(r"\D", "", vkn or "") or None
+        if not unvan and not vkn:
+            sonuc.append({"durum": "yok", "cari_id": None, "unvan": None, "benzer": []})
+            continue
+        c = _cari_oner(db, k, unvan, vkn)
+        if c is not None:
+            sonuc.append({"durum": "kayitli", "cari_id": c.id, "unvan": c.unvan, "benzer": []})
+        else:
+            from difflib import SequenceMatcher
+            yakinlik = lambda u: SequenceMatcher(None, kural.ad_anahtari(unvan), kural.ad_anahtari(u)).ratio()  # noqa: E731
+            benzer = sorted(({"id": b["id"], "unvan": b["unvan"]} for b in benzer_cariler(unvan or "", vkn or "", db, k)),
+                            key=lambda b: -yakinlik(b["unvan"]))  # en çok benzeyen önce (önerilen o)
+            sonuc.append({"durum": "yeni", "cari_id": None, "unvan": unvan, "benzer": benzer})
+    return sonuc
+
+
 @router.post("/toplu")
 def toplu_ekle(istek: TopluCek, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     """Toplu giriş ekranındaki satırları kaydeder. Her satır ayrı denenir: kaydedilemeyenin nedeni döner, ötekiler kaydedilir.
@@ -510,11 +553,8 @@ def toplu_ekle(istek: TopluCek, db: Session = Depends(get_db), k: Kullanici = De
                 raise HTTPException(400, "Vade yok.")
             with db.begin_nested():
                 cari_id = r.cari_id
-                if not cari_id and not (r.cari_unvan or r.cari_vkn):
-                    if r.yon == "alinan":
-                        r.cari_unvan, r.cari_vkn = r.kesideci, r.kesideci_vkn
-                    elif r.lehtar and not kural.kendi_unvani_mi(r.lehtar, sirket.unvan):
-                        r.cari_unvan = r.lehtar
+                if not cari_id:
+                    r.cari_unvan, r.cari_vkn = _satir_carisi(r, sirket)
                 if not cari_id and (r.cari_unvan or r.cari_vkn):
                     vkn = re.sub(r"\D", "", r.cari_vkn or "") or None
                     if vkn:
