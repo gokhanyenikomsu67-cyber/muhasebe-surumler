@@ -100,8 +100,10 @@ def denetle(zorla: bool = False) -> dict:
     """Yeni sürüm var mı: {var, yeni, simdiki, kaynak, hata}. Kendiliğinden yapılan denetim günde en çok bir kez."""
     simdiki = _surum()
     d = durum()
-    if not zorla and d.get("denetim_gunu") == date.today().isoformat():
-        return d.get("son_denetim") or {"var": False, "simdiki": simdiki}
+    onceki = d.get("son_denetim") or {}
+    # Günün denetimi yalnız aynı sürüm için geçerli: program bugün güncellendiyse eski "yeni sürüm var" sonucu kullanılmaz
+    if not zorla and d.get("denetim_gunu") == date.today().isoformat() and onceki.get("simdiki") == simdiki:
+        return onceki
     sonuc = {"var": False, "simdiki": simdiki, "yeni": None, "kaynak": None, "hata": None}
     if simdiki == "geliştirme":
         sonuc["hata"] = "Geliştirme sürümü güncellenmez."

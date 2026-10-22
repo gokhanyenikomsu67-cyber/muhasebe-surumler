@@ -82,3 +82,15 @@ def test_denetim_klasorden_ve_githubdan(program, tmp_path, monkeypatch):
     assert guncelleme.denetle()["yeni"] == "2026-10-23 3333333"
     d = guncelleme.denetle(zorla=True)
     assert not d["var"] and "ulaşılamadı" in d["hata"]
+
+
+def test_ayni_gun_guncellenince_eski_denetim_sonucu_kullanilmaz(program, tmp_path, monkeypatch):
+    monkeypatch.setattr(guncelleme, "_durum_dosyasi", lambda: tmp_path / "g.json")
+    monkeypatch.delenv("MUHASEBE_GUNCELLEME_KLASORU", raising=False)
+    monkeypatch.setattr(guncelleme, "_indir", lambda url, hedef=None: b"2026-10-22 2222222\n")
+    monkeypatch.setattr(guncelleme, "_surum", lambda: "2026-10-21 1111111")
+    assert guncelleme.denetle()["var"]
+    # Kullanıcı aynı gün güncelledi: program yeni sürümle açılınca "yeni sürüm var" yazmaz
+    monkeypatch.setattr(guncelleme, "_surum", lambda: "2026-10-22 2222222")
+    d = guncelleme.denetle()
+    assert not d["var"] and d["simdiki"] == "2026-10-22 2222222"

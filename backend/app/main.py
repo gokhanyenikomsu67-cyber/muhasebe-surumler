@@ -191,7 +191,10 @@ def _guncelleme_durumu() -> dict:
         sonuc = guncelleme.SONUC.read_text(encoding="utf-8").strip() or None  # baslat.bat'taki son uygulamanın sonucu
     except OSError:
         sonuc = None
-    return {**_GUNCELLEME, "son_denetim": d.get("son_denetim"), "son_guncelleme": d.get("son_guncelleme"), "sonuc": sonuc}
+    son = d.get("son_denetim")
+    if son and son.get("simdiki") != guncelleme._surum():
+        son = None  # program o denetimden sonra güncellendi: eski "yeni sürüm var" uyarısı gösterilmez
+    return {**_GUNCELLEME, "son_denetim": son, "son_guncelleme": d.get("son_guncelleme"), "sonuc": sonuc}
 
 
 @app.post("/api/sistem/guncelleme/denetle")
