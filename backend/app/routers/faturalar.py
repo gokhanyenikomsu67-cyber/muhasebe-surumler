@@ -484,6 +484,8 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
             tani.okundu(k.sirket_id, dosya.filename)
             return sonuc
         elif mime == "application/pdf" and yontem != "ai":
+            # Satış faturası alış ekranından (ya da tersi) yüklendiyse belgedeki taraflar esas alınır
+            yon = kural.pdf_yonu(icerik, sirket.vkn) or yon
             # Önce yapay zekasız; okunamazsa ve izin varsa yapay zekaya düş.
             try:
                 okunan = kural.pdf_fatura_oku(icerik, santiye_adlari, sirket.unvan, sirket.vkn, yon)

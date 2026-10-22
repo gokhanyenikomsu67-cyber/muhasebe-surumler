@@ -23,7 +23,7 @@ from . import kural, schemas
 from .db import VERI_KLASORU, SessionLocal
 from .models import Cari, Fatura, Sirket
 
-SURUM = 14
+SURUM = 15
 UYDURMA_SATIR = "KDV'siz / istisna tutar"  # eski sürüm toplam farkını bu satırla kapatıyordu
 RAPOR = VERI_KLASORU / "onarim-raporu.json"
 
@@ -305,11 +305,12 @@ def onar(db, sirket: Sirket, eski_surum: int = 0) -> dict:
             iskonto_kalem += 1
     db.commit()
     kur_yazilan, sus_temizlenen = _kur_ve_adlar(db, sirket)
+    yonu_duzelen = _yonu_duzelt(db, sirket)
     yeniden = _sorunlu_taslaklari_oku(db, sirket)
     onayli, tutari_degisen = _sorunlu_onaylilari_oku(db, sirket)
     db.commit()
     return {"ekstre_bilgisi_temizlenen_hesaplar": ekstresi_temizlenen, "birlesen_santiyeler": birlesen_santiye, "birlesen_cariler": birlesen_cari, "yeniden_okunan_taslaklar": yeniden, "yeniden_okunan_onaylilar": onayli, "tutari_degisen_onaylilar": tutari_degisen, "duzelen_cariler": duzelen_cari, "kontrol_edilecek_cariler": kalan_cari, "kalemleri_okunan_faturalar": duzelen_fatura,
-            "tevkifati_kalemlere_yazilan": tevkifat_fatura,
+            "tevkifati_kalemlere_yazilan": tevkifat_fatura, "satisa_alinan_taslaklar": yonu_duzelen,
             "kdv_tutari_duzeltilen": kdv_fatura, "iskontosu_sutuna_tasinan_kalem": iskonto_kalem,
             "ogrenilen_kendi_vkn": ogrenilen_vkn, "kuru_yazilan_faturalar": kur_yazilan, "adi_temizlenen_kalem": sus_temizlenen}
 
@@ -335,6 +336,43 @@ def _kur_ve_adlar(db, sirket: Sirket) -> tuple[list[str], int]:
                 sus += 1
         db.commit()
     return kur_yazilan, sus
+
+
+def _yonu_duzelt(db, sirket: Sirket) -> list[str]:
+    """Satış faturası alış olarak (ya da tersi) okunmuş taslaklar: PDF'te satıcı VKN'si bizimse satışa alınır, belge doğru
+    yönle yeniden okunur ve cari karşı firmayla düzeltilir. Onaylı faturalara dokunulmaz."""
+    from types import SimpleNamespace
+
+    from .routers.faturalar import DOSYA_KLASORU, cari_bul_ya_ac, kalem_giris, kalemleri_yaz, notlari_ayir, toplam_farki
+    duzelen = []
+    for f in db.scalars(select(Fatura).where(Fatura.sirket_id == sirket.id, Fatura.durum == "taslak")).all():
+        if f.xml_dosya or not (f.kaynak_dosya or "").endswith(".pdf"):
+            continue
+        try:
+            dogru = kural.pdf_yonu((DOSYA_KLASORU / f.kaynak_dosya).read_bytes(), sirket.vkn)
+        except OSError:
+            continue
+        if not dogru or dogru == f.yon:
+            continue
+        f.yon = dogru
+        okunan = _pdf_oku(f, sirket)
+        if not okunan:
+            continue
+        karsi = okunan.get("satici" if dogru == "gelen" else "alici") or {}
+        c, _ = cari_bul_ya_ac(db, SimpleNamespace(sirket_id=sirket.id), karsi, "tedarikci" if dogru == "gelen" else "musteri")
+        f.cari = c
+        f.fatura_no = f.fatura_no or okunan.get("fatura_no")
+        f.tevkifat, f.diger_vergiler, f.stopaj = okunan.get("tevkifat") or 0, okunan.get("diger_vergiler") or 0, okunan.get("stopaj") or 0
+        f.yuvarlama = okunan.get("yuvarlama") or 0
+        if okunan.get("kalemler"):
+            santiye = next((k.santiye_id for k in f.kalemler if k.santiye_id), None)
+            kalemleri_yaz(f, [kalem_giris(k, santiye) for k in okunan["kalemler"]])
+        f.ai_okuma = {**(f.ai_okuma or {}), **okunan, "uyarilar": toplam_farki(f, okunan) + notlari_ayir(okunan.get("notlar"))[0],
+                      "bilgi": ["Satıcı firmanız olduğu için satış faturası olarak yeniden okundu." if dogru == "giden"
+                                else "Alıcı firmanız olduğu için alış faturası olarak yeniden okundu."]}
+        duzelen.append(f.fatura_no or str(f.id))
+        db.commit()
+    return duzelen
 
 
 def _sorunlu_taslaklari_oku(db, sirket: Sirket) -> list[str]:

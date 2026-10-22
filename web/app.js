@@ -1338,7 +1338,9 @@ function aiOkumaAc() {
           const u = [...ou, ...(sr ? [] : (sorunlar[f.id] || []).map((x) => x.neden)
             .filter((x) => !(x.startsWith("Cari: adı faturada yazmıyor") && ou.some((y) => y.startsWith("Firmanın adı")))))]
             .filter((x, i, d) => d.indexOf(x) === i);
-          return h("tr", { class: sr ? "islenemedi" : u.length ? "secili" : "", title: [sr, ...u].filter(Boolean).join("\n") },
+          // Satıra (cari adına) tıklayınca İncele açılır; onay kutusu, düğme ve seçim kutuları kendi işini yapar
+          return h("tr", { class: `${sr ? "islenemedi" : u.length ? "secili" : ""} tiklanir`, title: [sr, ...u].filter(Boolean).join("\n"),
+            onclick: (e) => { if (!e.target.closest("input, button, select, a, label")) faturaFormAc(f, f.yon); } },
             h("td", {}, h("input", { type: "checkbox", checked: secili.has(f.id), onchange: (e) => { e.target.checked ? secili.add(f.id) : secili.delete(f.id); sayacYaz(); } })),
             h("td", {}, tarih(f.tarih)), h("td", {}, f.fatura_no || ""), h("td", { style: "white-space:normal;min-width:200px" }, karsi(f)),
             h("td", {}, f.santiye_ad || ""), h("td", {}, f.gider_turu || ""),

@@ -604,7 +604,7 @@ def _unvan_satirlari(satirlar: list[str], vkn_i: int) -> str | None:
             if etiketli and not _ADRES.search(etiketli.group(1)):
                 toplanan.insert(0, ham[ham.index(":") + 1:].strip())
                 break
-            if (not sa or _ETIKET.search(sa) or _ADRES.search(sa) or _DUR.search(sa) or _TARAF_BASLIGI.match(sa)
+            if (not re.search(r"[a-z]", sa) or _ETIKET.search(sa) or _ADRES.search(sa) or _DUR.search(sa) or _TARAF_BASLIGI.match(sa)
                     or re.search(r"(?<![a-z0-9])\d+(?![a-z0-9])", sa)
                     or re.fullmatch(r"[0-9a-f-]{8,}", sa)  # ETTN'nin alt satıra taşan parçası
                     or re.match(r"^(senaryo|fatura|ozellestirme|duzenleme|siparis|irsaliye)", sa)):
@@ -640,7 +640,58 @@ def pdf_taraflari(metin: str) -> tuple[dict, dict]:
 
     def taraf(v):
         return {"unvan": _unvan_bul(satirlar, v[0]) if v else None, "vkn": v[1] if v else None}
-    return taraf(satici_i), taraf(alici_i)
+    satici, alici = taraf(satici_i), taraf(alici_i)
+    if isaret is not None and alici_i is not None and alici_i[0] > isaret:
+        # "SAYIN" bloğunda ad ilk satırdadır. VKN'den geriye yürüyerek ad bulunamadıysa ya da şirket eki taşımayan bir
+        # kurum adı ("ELMALI KÖYÜ MUHTARLIĞI", "... ORGANİZE SANAYİ BÖLGESİ") atlandıysa ad oradan alınır.
+        ileri = _sayin_sonrasi_ad(satirlar, isaret, alici_i[0])
+        if ileri and (not alici["unvan"] or kotu_unvan(alici["unvan"])
+                      or (not SIRKET_EKLERI.search(sade(alici["unvan"])) and _KAMU.search(sade(ileri))
+                          and not _KAMU.search(sade(alici["unvan"])))):
+            alici["unvan"] = ileri
+    return satici, alici
+
+
+def pdf_yonu(veri: bytes, sirket_vkn: str | None) -> str | None:
+    """PDF faturanın yönü belgeden: satıcı VKN'si bizimse satış (giden), alıcınınki bizimse alış (gelen); bilinmiyorsa None.
+    Kullanıcının seçtiği tür ne olursa olsun belge esastır (satış faturası alışa düşmez)."""
+    vkn = re.sub(r"\D", "", sirket_vkn or "")
+    if not vkn:
+        return None
+    try:
+        satici, alici = pdf_taraflari(pdf_metni(veri))
+    except KuralHatasi:
+        return None
+    if satici["vkn"] == vkn and alici["vkn"] != vkn:
+        return "giden"
+    if alici["vkn"] == vkn and satici["vkn"] != vkn:
+        return "gelen"
+    return None
+
+
+def _sayin_sonrasi_ad(satirlar: list[str], isaret: int, son: int) -> str | None:
+    """'SAYIN' satırından sonraki ad: ilk dolu satır (etiketten sonra yazılmışsa o kısım) ve şirket ekiyle süren devamı.
+    Adres, etiket ve rakamlı satırlar ad değildir; kurum adındaki köy/mahalle adı adres sayılmaz."""
+    ilk = re.sub(r"^\s*(?:sayin|alici|SAYIN|ALICI|Sayın|SAYIN)\b[^:\n]{0,15}:?\s*", "", satirlar[isaret], flags=re.IGNORECASE).strip()
+    adaylar = ([ilk] if ilk else []) + [x.strip() for x in satirlar[isaret + 1:son]]
+    ad: list[str] = []
+    for x in adaylar:
+        sa = sade(x)
+        if not re.search(r"[a-z]{2}", sa) or _ETIKET.search(sa) or _DUR.search(sa):
+            if ad or not sa or not re.search(r"[a-z]{2}", sa):
+                break
+            continue
+        kurum = bool(_KAMU.search(sa))
+        adres = bool(_ADRES.search(_KAMU_BIRIMI.sub(" ", sa) if kurum else sa)) or bool(re.search(r"(?<![a-z0-9])\d+(?![a-z0-9])", sa)) \
+            and not kurum and not SIRKET_EKLERI.search(sa)
+        if adres:
+            break
+        if ad and not (SIRKET_EKLERI.search(sa) or _KAMU.search(sa) or re.fullmatch(r"(sirketi?|sti\.?)", sa)):
+            break  # ikinci satır yalnız ünvanın devamıysa ("ŞİRKETİ") alınır
+        ad.append(x)
+        if len(ad) == 3:
+            break
+    return " ".join(ad) or None
 
 
 _PB = r"(?:TL|TRY|₺)"  # para birimi yazımı
@@ -2011,8 +2062,10 @@ SIRKET_EKLERI = re.compile(r"\b(ltd|sti|limited|sirket|a\.?s\b|anonim|tic\b|tica
 
 # Kamu kurumu ünvanı ("T.C. KARAYOLLARI 14. BÖLGE MÜDÜRLÜĞÜ", "... BELEDİYESİ"): "müdürlüğü/şubesi" orada adres değil ad.
 _KAMU = re.compile(r"^t\.? ?c\.? |\b(bakanligi|baskanligi|belediyesi|valiligi|kaymakamligi|universitesi|genel mudurlugu|"
-                   r"bolge mudurlugu|il mudurlugu|ilce mudurlugu|kurumu|idaresi)\b")
-_KAMU_BIRIMI = re.compile(r"\b(mudurluk|mudurlugu|sube|subesi)\b")
+                   r"bolge mudurlugu|il mudurlugu|ilce mudurlugu|kurumu|idaresi|muhtarligi|organize sanayi bolgesi|"
+                   r"sanayi bolgesi|kooperatifi|birligi|odasi|dernegi|vakfi|okulu|mudurlugu|cemiyeti|sendikasi)\b")
+# Kurum adının içindeki yer adı adres sayılmaz: "ELMALI KÖYÜ MUHTARLIĞI", "YENİ MAHALLESİ MUHTARLIĞI"
+_KAMU_BIRIMI = re.compile(r"\b(mudurluk|mudurlugu|sube|subesi|koy|koyu|mahallesi|beldesi|osb)\b")
 
 
 def kotu_unvan(unvan: str | None) -> bool:

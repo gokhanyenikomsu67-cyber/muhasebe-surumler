@@ -172,7 +172,7 @@ def cari_kontrol(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kul
     r = onarim.rapor_oku().get("sirketler", {}).get(str(k.sirket_id), {})
     # Açılış onarımının düzelttikleri kullanıcıya yalnız sayı olarak gösterilir
     duzelen = sum(len(r.get(a) or []) for a in ("duzelen_cariler", "birlesen_santiyeler", "birlesen_cariler", "kalemleri_okunan_faturalar", "yeniden_okunan_taslaklar",
-                                                "yeniden_okunan_onaylilar", "tevkifati_kalemlere_yazilan", "kdv_tutari_duzeltilen")) \
+                                                "yeniden_okunan_onaylilar", "tevkifati_kalemlere_yazilan", "kdv_tutari_duzeltilen", "satisa_alinan_taslaklar")) \
         + int(r.get("iskontosu_sutuna_tasinan_kalem") or 0)
     return {"sorunlu": sorunlu, "sorunlu_faturalar": tani.onayli_sorunlari(db, sirket),
             "otomatik_duzeltilen": duzelen, "tutari_degisen": len(r.get("tutari_degisen_onaylilar") or [])}
