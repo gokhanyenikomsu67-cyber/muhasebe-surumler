@@ -198,7 +198,8 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     k = kayit.kullanici
     db.info["kullanici_id"] = k.id
     try:
-        cevap = soru.cevapla(db, k, veri.metin, sohbet=True, hitap=veri.hitap)
+        # Seçilen gruplar bot için açılmış gruplardır: oradaki her yazı bota yazılmış sayılır (sorulunca hep cevap)
+        cevap = soru.cevapla(db, k, veri.metin, sohbet=True, hitap=True)
     except Exception as e:  # noqa: BLE001
         bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, kayit.ad, veri.metin, f"Hata: {e}")
         return {"cevap": "Bir hata oluştu, programda WhatsApp Botu ekranına bakın."}

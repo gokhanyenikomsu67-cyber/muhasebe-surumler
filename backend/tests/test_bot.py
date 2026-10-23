@@ -105,24 +105,27 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
         r = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "gebze harcama"})
         assert "Gebze Fabrika" in r.json()["cevap"]
         # Sohbet mesajına karışmaz
-        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "tamam sağol"}).json()["cevap"] is None
-        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "yarın gebzeye gidiyorum"}).json()["cevap"] is None
+        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "tamam"}).json()["cevap"] is None
         assert "Gebze Fabrika" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "gebze?"}).json()["cevap"]
         # Kısa yazı soru sayılır, şantiye yanlış yazılsa da ("santiesi"); anlaşılmayan kısa yazıya "yardım yazın" denir
         for m in ("gebze santiesi", "Gebze", "gebze şantiyesi ne durumda"):
             assert "Gebze Fabrika" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": m}).json()["cevap"], m
         assert "Demir Çelik" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "demir çelik"}).json()["cevap"]
-        # Anlaşılmayan yazıya yalnız bota yazılınca (@bahsetme ya da yanıt) "yardım yazın" denir; sohbete karışılmaz
-        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "kasım raporu"}).json()["cevap"] is None
-        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": ".... Yedik"}).json()["cevap"] is None
-        assert "yardım" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "kasım raporu",
+        # Seçili grup bota açılmış gruptur: her yazıya cevap (anlamazsa "yardım yazın", sohbete şakacı cevap)
+        sor = lambda m: client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe",  # noqa: E731
+                                                                "metin": m}).json()["cevap"]
+        assert "yardım" in sor("ASD A:SDA:SD:ASDAS")
+        assert sor("Hey yapay") and sor("Nasılsın") and sor("Giderim yok")
+        assert "Genel durum" in sor("Bana 2025 2026 tüm muhasebe detaylarını çıkart")
+        assert "yardım" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "qwe rty",
                                                                    "hitap": True}).json()["cevap"]
         c = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "@123456789 kaç para ödenmemiş çek var",
                                                     "hitap": True}).json()["cevap"]
         assert "Ödenecek (verdiğimiz): 1 çek, *600,00 TL*" in c and "Tahsil edilecek (aldığımız): 1 çek, *4.000,00 TL*" in c, c
         c = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "Kaç para ödenmiş çek var"}).json()["cevap"]
         assert "Ödenmiş çekler" in c and "Bu ay" in c and "Bu yıl" in c, c
-        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "tamam teşekkürler"}).json()["cevap"] is None
+        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "grup": "YapayZeka Destekli Muhasebe", "metin": "tamam teşekkürler"}).json()["cevap"] is not None
+        assert sor("tamam") is None
         # Ekranda son gelenler: kim, ne yazdı, ne yapıldı
         son = bot.MESAJLAR[-2:]
         assert son[0]["ad"] == "Patron 1" and son[0]["sonuc"] == "Cevap verildi" and son[1]["sonuc"].startswith("Cevap verilmedi")

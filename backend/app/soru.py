@@ -103,6 +103,33 @@ _SOHBET = {"tamam", "ok", "okey", "peki", "evet", "hayir", "sagol", "sagolun", "
            "super", "harika", "guzel", "haha", "tmm", "slm", "mrb", "tsk", "saol"}
 ANLAMADIM = "Anlayamadım. Neler sorabileceğinizi görmek için *yardım* yazın."
 
+# Bota seslenme ve sohbete kısa, şakacı cevaplar (kullanıcı istedi). (anahtar kelimeler, cevaplar)
+_SAKALAR = [
+    ({"nasilsin", "naber", "nbr", "nasilsiniz", "iyimisin"},
+     ["Bomba gibiyim! Hesaplar tıkır tıkır, kuruşu kuruşuna 😎", "İyiyim, sağ olun. Faturalar onaylı, keyfim yerinde 📊",
+      "Çok şükür, bugün hiçbir tutar kırmızı yanmadı 😄"]),
+    ({"hey", "yapay", "bot", "zeka", "muhasebeci", "orada", "ordamisin", "burdamisin", "kimsin"},
+     ["Buradayım! Emredin, hangi hesabı açalım? 🙋 (*yardım* yazarsanız neler sorabileceğinizi söylerim)",
+      "Yapay zekâ değil, yapay muhasebeci 😄 Sorun bakalım: şantiye, firma, çek, banka…",
+      "Çağırdınız mı? Kasada değil, buradayım 😄 *yardım* yazın, menüyü göstereyim."]),
+    ({"merhaba", "selam", "slm", "mrb", "gunaydin", "aksamlar", "iyi", "selamunaleykum", "sa"},
+     ["Merhaba! Bugün hangi rakama bakalım? 👋", "Selam! Hesaplar hazır, siz sorun yeter 🙂"]),
+    ({"sagol", "saol", "sagolun", "tesekkur", "tesekkurler", "eyvallah", "tsk", "eline", "emegine"},
+     ["Rica ederim, ne demek! 🙏", "Ne zaman isterseniz, kuruş hatası yapmadan 😉"]),
+    ({"yok", "giderim", "parasiz", "param", "zengin", "fakir"},
+     ["Gider yoksa harika, ama ben faturaları gördüm, emin misiniz? 😄", "Giderim yok diyenle aynı masada oturmam, defterler konuşur 📒😄"]),
+    ({"haha", "hahaha", "sjsj", "jsjs", "kahkaha", "lol", "komik"}, ["😄", "Gülmek bedava, KDV'si yok 😄"]),
+]
+
+
+def saka(w: list[str]) -> str | None:
+    """Sohbet yazısına şakacı kısa cevap (yoksa None)."""
+    import random
+    for kelimeler, cevaplar in _SAKALAR:
+        if set(w) & kelimeler:
+            return random.choice(cevaplar)
+    return None
+
 
 def _yalniz_ad(s: str, adlar: list[str]) -> bool:
     """Yazıda adın kelimeleri ve soru/zaman kelimelerinden başka kelime yok mu ("gebze santiesi" evet,
@@ -369,8 +396,15 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
     if s in ("yardim", "menu", "neler sorabilirim", "ne sorabilirim", "komutlar") or w[0] == "yardim":
         return YARDIM
     ws = set(w)
-    if ws & {"genel", "ozet"} and ("durum" in ws or "ozet" in ws):
-        return genel_durum(db, k, bugun)
+    sohbet_kelimeleri = _SOHBET.union(*(k_ for k_, _ in _SAKALAR))
+    if sohbet and hitap and ws <= sohbet_kelimeleri:  # yalnız selam/hal hatır/teşekkür: şakacı kısa cevap ("tamam"a cevap yok)
+        return saka(w)
+    if ws & {"genel", "ozet"} and ("durum" in ws or "ozet" in ws) or ws & {"muhasebe", "detay", "detaylari", "detaylarini", "rapor", "raporu"} \
+            and ws & {"cikart", "cikar", "ver", "goster", "tum", "butun", "detaylarini", "detaylari", "rapor", "raporu", "ozet"}:
+        cevap = genel_durum(db, k, bugun)
+        if not ws & {"genel", "ozet"}:
+            cevap += "\n\n_Ayrıntılı rapor için programdaki Raporlar menüsünü kullanın; buradan şantiye, firma, çek, banka sorabilirsiniz._"
+        return cevap
     if re.search(r"\b(kime borcluyuz|borclarimiz|borclu oldugumuz|odenecek borclar)\b", s):
         return borc_listesi(db, k, alacak=False) if _gorebilir(k, "cari") else _yetkisiz("cari")
     if re.search(r"\b(alacaklarimiz|kimden alacag|bize borclu|alacakli oldugumuz)\b", s):
@@ -408,7 +442,7 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
     s_bulunan = ad_bul(s, santiyeler) if not cari_kelimesi or santiye_kelimesi else []
     soru_kelimesi = santiye_kelimesi or cari_kelimesi or metin.strip().endswith("?")
     if s_bulunan and (santiye_kelimesi or not cari_kelimesi):
-        if sohbet and not soru_kelimesi and not _yalniz_ad(s, [n for x in s_bulunan for n in kural.kayit_adlari(x)]):
+        if sohbet and not hitap and not soru_kelimesi and not _yalniz_ad(s, [n for x in s_bulunan for n in kural.kayit_adlari(x)]):
             return None
         if not _gorebilir(k, "santiye"):
             return _yetkisiz("santiye")
@@ -417,7 +451,7 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
         return santiye_cevabi(db, k, s_bulunan[0], s, bugun)
     c_bulunan = cari_bul()
     if c_bulunan:
-        if sohbet and not soru_kelimesi and not _yalniz_ad(s, [x.unvan for x in c_bulunan]):
+        if sohbet and not hitap and not soru_kelimesi and not _yalniz_ad(s, [x.unvan for x in c_bulunan]):
             return None
         if not _gorebilir(k, "cari"):
             return _yetkisiz("cari")
@@ -428,4 +462,6 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
         return "Hangi şantiye? Şantiyenin adını da yazar mısınız? (ör. \"GEBZE şantiye harcaması bu ay\")"
     if cari_kelimesi:
         return "Hangi firma? Firmanın adını da yazar mısınız? (ör. \"ABC bakiye\")"
-    return anlamadim
+    if anlamadim:
+        return saka(w) or anlamadim
+    return None
