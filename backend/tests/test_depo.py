@@ -98,6 +98,20 @@ def _bordro() -> bytes:
     return tampon.getvalue()
 
 
+def test_bordro_yalniz_depo_secilerek():
+    """Bordro Yükle'de yalnız taşeron (depo) seçilir: carisi depodan alınır, depoda cari yoksa depo adıyla açılıp bağlanır."""
+    h, s, _, taseron, d = _kur()
+    v = client.post("/api/taseron-giderleri/bordro-onizle", files={"dosya": ("bordro.xlsx", _bordro(), "application/octet-stream")}, headers=h).json()
+    kayit = {"donem": v["donem"], "depo_id": d["id"], "kisiler": v["kisiler"]}
+    assert client.post("/api/taseron-giderleri/bordro", json=kayit, headers=h).json() == {"eklenen": 2, "guncellenen": 0}
+    assert _bakiye(h, taseron["id"]) == 1841.25
+    bos = client.post("/api/depolar", json={"ad": "Deneme Taşeron İki", "santiye_id": s["id"]}, headers=h).json()
+    assert client.post("/api/taseron-giderleri/bordro", json={**kayit, "depo_id": bos["id"]}, headers=h).json()["eklenen"] == 2
+    bagli = next(x for x in client.get("/api/depolar", headers=h).json() if x["id"] == bos["id"])
+    assert bagli["cari_unvan"] == "Deneme Taşeron İki" and _bakiye(h, bagli["cari_id"]) == 1841.25
+    assert client.post("/api/taseron-giderleri/bordro", json={**kayit, "depo_id": None}, headers=h).status_code == 422
+
+
 def test_bordro_excelinden_personel_sgk():
     h, s, satici, taseron, d = _kur()
     r = client.post("/api/taseron-giderleri/bordro-onizle", files={"dosya": ("bordro.xlsx", _bordro(), "application/octet-stream")}, headers=h)

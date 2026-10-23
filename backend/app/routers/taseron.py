@@ -328,7 +328,7 @@ async def bordro_onizle(dosya: UploadFile = File(...), k: Kullanici = Depends(ya
 
 
 class BordroKaydi(BaseModel):
-    cari_id: int
+    cari_id: int | None = None  # boşsa deponun carisi; depoda cari yoksa depo adıyla taşeron carisi açılıp depoya bağlanır
     donem: str
     santiye_id: int | None = None
     depo_id: int | None = None
@@ -355,6 +355,18 @@ def bordro_kaydet(istek: BordroKaydi, db: Session = Depends(get_db), k: Kullanic
         raise HTTPException(422, "Bordro ayını seçin.")
     yil, ay = map(int, istek.donem.split("-"))
     tarih = date(yil, ay, monthrange(yil, ay)[1])
+    if not istek.cari_id:
+        depo = db.get(Depo, istek.depo_id) if istek.depo_id else None
+        if depo is None or depo.sirket_id != k.sirket_id:
+            raise HTTPException(422, "Bordronun yazılacağı taşeronu (depo) seçin.")
+        if not depo.cari_id:
+            from .faturalar import cari_bul_ya_ac
+            cari, _ = cari_bul_ya_ac(db, k, {"unvan": depo.ad}, "tedarikci")
+            if cari is None:
+                raise HTTPException(422, "Taşeronun adı cari açmaya uygun değil; depoyu bir cariye bağlayın.")
+            depo.cari_id = cari.id
+        istek.cari_id = depo.cari_id
+        istek.santiye_id = istek.santiye_id or depo.santiye_id
     eski = {(g.personel or "", g.tckn or ""): g for g in db.scalars(select(TaseronGider).where(
         TaseronGider.sirket_id == k.sirket_id, TaseronGider.cari_id == istek.cari_id, TaseronGider.tur == "personel",
         TaseronGider.donem == istek.donem))}

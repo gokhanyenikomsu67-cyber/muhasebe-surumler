@@ -638,8 +638,8 @@ function bordroYukleAc({ cariId = null } = {}) {
   if (cariId) b.cari = String(cariId);
   sekmeAc("bordro-yukle", "Bordro Yükle", {
     async ciz(el) {
-      let santiyeler, depolar, cariler;
-      try { [santiyeler, depolar, cariler] = await Promise.all([api("/api/santiyeler"), api("/api/depolar"), api("/api/cariler")]); }
+      let santiyeler, depolar;
+      try { [santiyeler, depolar] = await Promise.all([api("/api/santiyeler"), api("/api/depolar")]); }
       catch (e) { return bildir(e.message, true); }
       if (b.oran == null) { try { b.oran = localStorage.getItem("sgk_orani"); } catch { /* yoksa varsayılan */ } b.oran = b.oran ?? "37.75"; }
       const dosyaG = h("input", { type: "file", accept: ".xlsx,.xls", hidden: true, onchange: async (e) => {
@@ -655,29 +655,22 @@ function bordroYukleAc({ cariId = null } = {}) {
       const santiyeS = h("select", { onchange: (e) => { b.santiye = e.target.value; b.depo = ""; yenidenCiz(); } },
         secenekler(secimeUygun(santiyeler, Number(b.santiye)), "— Şantiye seçin —", b.santiye));
       const uygunDepo = secimeUygun(depolar, Number(b.depo)).filter((d) => !b.santiye || String(d.santiye_id) === b.santiye);
-      const depoS = h("select", { onchange: (e) => {
-        b.depo = e.target.value;
-        const d = depolar.find((x) => String(x.id) === b.depo);
-        if (d?.cari_id) b.cari = String(d.cari_id);
-        yenidenCiz();
-      } }, secenekler(uygunDepo, "— Şantiyenin kendisi —", b.depo, (d) => (b.santiye ? d.ad : depoEtiketi(d))));
+      // Depo = taşeron; carisi (hesabı) depoya bağlıdır, yoksa kayıtta depo adıyla açılıp bağlanır
+      if (b.cari && !b.depo) { const d = uygunDepo.find((x) => String(x.cari_id) === b.cari); if (d) b.depo = String(d.id); }
+      const depoS = h("select", { onchange: (e) => { b.depo = e.target.value; b.cari = ""; yenidenCiz(); } },
+        secenekler(uygunDepo, "— Taşeron seçin —", b.depo, (d) => (b.santiye ? d.ad : depoEtiketi(d))));
       const depo = depolar.find((x) => String(x.id) === b.depo);
-      const cariS = h("select", { onchange: (e) => (b.cari = e.target.value) },
-        h("option", { value: "" }, "— Taşeron (cari) seçin —"),
-        cariler.map((c) => h("option", { value: c.id, selected: String(c.id) === b.cari }, c.unvan)));
       const donemI = h("input", { type: "month", value: b.donem, onchange: (e) => (b.donem = e.target.value) });
       const oranI = h("input", { type: "number", step: "any", value: b.oran, style: "width:70px", onchange: (e) => { b.oran = e.target.value; yenidenCiz(); } });
       el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Bordro Yükle"), dosyaG,
           h("button", { class: "dugme ana", onclick: () => dosyaG.click() }, b.veri ? "Başka bordro yükle" : "Bordro Excel'ini seç"),
           b.veri ? h("span", {}, b.veri.dosya_adi || "") : ""),
-        h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Şantiye:", santiyeS, "Depo (taşeron):", depoS,
-          "Taşeron:", depo?.cari_id ? h("b", {}, depo.cari_unvan) : cariS, "Ay:", donemI,
+        h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Şantiye:", santiyeS, "Taşeron (depo):", depoS, "Ay:", donemI,
           h("label", { title: "SGK masrafı = normal kazanç x bu oran" }, "SGK oranı %: ", oranI)));
       aramaliSec(santiyeS, { bosYazi: "— Şantiye seçin —" });
-      if (!depo?.cari_id) cariAramali(cariS, cariler, { bosYazi: "— Taşeron (cari) seçin —" });
       if (!b.veri) {
         return el.append(ACIKLAMA("Bordro Excel'ini seçin (Adı Soyadı, TCKN, T.Gün, Nor.Kazanç, SSK İşçi, İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları). "
-          + "Şantiyeyi ve o şantiyedeki taşeron deposunu seçin; depo seçmezseniz şantiyenin kendisine yazılır. "
+          + "Şantiyeyi ve o şantiyedeki taşeronu (depoyu) seçin; bordro o taşeronun hesabına yazılır. "
           + "SGK maliyeti = normal kazanç x %37,75; taşerona net ödenen + vergi + SGK maliyeti borç yazılır."));
       }
       // Sunucudaki bordro_satiri ile aynı hesap
@@ -696,15 +689,11 @@ function bordroYukleAc({ cariId = null } = {}) {
       const kaydet = async () => {
         if (!b.donem) return bildir("Bordro ayını seçin.", true);
         if (!secilen.length) return bildir("Personel seçin.", true);
-        const cariIdSec = Number(depo?.cari_id || cariS.value) || null;
-        if (!cariIdSec) return bildir("Bordronun yazılacağı taşeronu (cari) seçin.", true);
+        if (!depo) return bildir("Bordronun yazılacağı taşeronu seçin.", true);
         try { localStorage.setItem("sgk_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
         try {
-          if (depo && !depo.cari_id) {  // depo bu taşerona bağlanır; sonraki bordro ve fatura kalemleri de ona yazılır
-            await api(`/api/depolar/${depo.id}`, { metod: "PUT", veri: { ad: depo.ad, santiye_id: depo.santiye_id, cari_id: cariIdSec, aciklama: depo.aciklama, durum: depo.durum || "aktif" } });
-          }
-          const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: cariIdSec, donem: b.donem,
-            santiye_id: Number(b.santiye) || depo?.santiye_id || null, depo_id: depo ? depo.id : null, sgk_orani: Number(oranI.value) || 0, kisiler: secilen } });
+          const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: depo.cari_id || null, donem: b.donem,
+            santiye_id: Number(b.santiye) || depo.santiye_id || null, depo_id: depo.id, sgk_orani: Number(oranI.value) || 0, kisiler: secilen } });
           bildir(`${r.eklenen} personel taşeronun hesabına yazıldı${r.guncellenen ? `, ${r.guncellenen} personel güncellendi` : ""}.`);
           b.veri = null;
           listeyiTazele("taseron");
