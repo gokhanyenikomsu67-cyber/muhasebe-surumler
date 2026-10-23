@@ -42,7 +42,7 @@ BOLUM_KURALLARI = [
 ]
 _SIL = {"sil", "toplu-sil", "okunamayanlar"}
 _DUZENLE = {"iptal", "iptal-geri", "iptal-et", "toplu-guncelle", "toplu-islem", "islem", "karsi-hesap", "esle",
-            "birlestir", "ad-cikar", "odendi"}
+            "birlestir", "ad-cikar", "odendi", "depoya-cevir", "durum"}
 # Kayıt açmak için gereken yardımcı kayıtlar: fatura/çek/banka girebilen, oradan yeni cari/şantiye de açabilir
 _YARDIMCI = {"cari", "santiye"}
 _GIRIS_BOLUMLERI = {"fatura", "cek", "banka", "santiye", "cari"}

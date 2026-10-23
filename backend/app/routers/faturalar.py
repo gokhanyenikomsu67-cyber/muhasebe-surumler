@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .. import ai, karekod, kural, ocr, schemas, tani
 from ..auth import aktif_kullanici, yazabilir
@@ -109,10 +109,10 @@ def listele(
     db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici),
 ):
     q = select(Fatura).where(Fatura.sirket_id == k.sirket_id)
-    for alan, deger in [(Fatura.yon, yon), (Fatura.durum, durum), (Fatura.cari_id, cari_id)]:
+    for alan, deger in [(Fatura.yon, yon), (Fatura.durum, None if durum == "kayitli" else durum), (Fatura.cari_id, cari_id)]:
         if deger is not None:
             q = q.where(alan == deger)
-    if durum is None:  # Wolvox'tan aktarılan geçmiş faturalar yalnız kendi süzgeciyle listelenir
+    if durum == "kayitli":  # Wolvox'tan aktarılanlar dışındakiler
         q = q.where(Fatura.durum != "aktarim")
     if santiye_id is not None:  # faturanın ya da herhangi bir kaleminin şantiyesi
         q = q.where(or_(Fatura.santiye_id == santiye_id, Fatura.kalemler.any(FaturaKalem.santiye_id == santiye_id)))
@@ -120,8 +120,9 @@ def listele(
         q = q.where(Fatura.tarih >= baslangic)
     if bitis:
         q = q.where(Fatura.tarih <= bitis)
-    q = q.order_by(Fatura.tarih.desc().nulls_first(), Fatura.id.desc())
-    return [cikis(f) for f in db.scalars(q).all()]
+    q = q.order_by(Fatura.tarih.desc().nulls_first(), Fatura.id.desc()).options(
+        selectinload(Fatura.kalemler).joinedload(FaturaKalem.santiye), joinedload(Fatura.cari), joinedload(Fatura.santiye))
+    return [cikis(f) for f in db.scalars(q).unique().all()]
 
 
 @router.get("/sonraki-no")

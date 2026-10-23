@@ -82,6 +82,22 @@ def depo_guncelle(depo_id: int, veri: schemas.DepoGiris, db: Session = Depends(g
     return _depo_cikis(d)
 
 
+class DepoDurumu(BaseModel):
+    idler: list[int]
+    durum: str  # aktif | pasif
+
+
+@router.post("/depolar/durum")
+def depo_durumu(istek: DepoDurumu, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Aktif / pasif: pasif depo seçim listelerinde görünmez, kayıtları durur."""
+    if istek.durum not in ("aktif", "pasif"):
+        raise HTTPException(422, "Durum aktif ya da pasif olmalı.")
+    for i in istek.idler:
+        sirket_kaydi(db, Depo, i, k).durum = istek.durum
+    db.commit()
+    return {"ok": True}
+
+
 @router.delete("/depolar/{depo_id}")
 def depo_sil(depo_id: int, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     d = sirket_kaydi(db, Depo, depo_id, k)

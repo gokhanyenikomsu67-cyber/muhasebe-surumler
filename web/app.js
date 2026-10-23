@@ -225,6 +225,13 @@ document.addEventListener("keydown", (e) => {
   if ($("#uygulama").hidden) return;
   if (e.key === "F3" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k")) { e.preventDefault(); return hizliAramaAc(); }
   if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); return e.key === "ArrowLeft" ? geriGit() : ileriGit(); }
+  // Esc önce açık pencereyi (arama, soru) kapatır; pencere yoksa sekmeyi
+  const pencere = e.key === "Escape" ? [...document.querySelectorAll("dialog[open]")].pop() : null;
+  if (pencere) {
+    e.preventDefault();
+    if (pencere.dispatchEvent(new Event("cancel", { cancelable: true }))) pencere.close();  // "Vazgeç" gibi işlenir
+    return;
+  }
   const yazarken = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
   const tus = { Insert: "yeni", F2: "kaydet", F5: "yenile", F9: "excel", Escape: "kapat" }[e.key]
     || (!yazarken && e.key === "Delete" ? "sil" : null)
@@ -413,12 +420,32 @@ function listeyiTazele(anahtar) {
 }
 
 // ---------------------------------------------------------------- şantiyeler
+// Listede Aktif / Pasif düğmesi: pasif kayıt seçim listelerinde görünmez, kayıtları durur
+function durumDugmesi(x, yol) {
+  const aktif = aktifMi(x);
+  return h("button", { class: `dugme kucuk${aktif ? "" : " tehlike"}`, title: aktif ? "Pasif yap: seçim listelerinde görünmesin" : "Yeniden aktif yap",
+    onclick: async (e) => {
+      e.stopPropagation();
+      try { await api(yol, { metod: "POST", veri: { idler: [x.id], durum: aktif ? "pasif" : "aktif" } }); yenidenCiz(); }
+      catch (err) { bildir(err.message, true); }
+    } }, aktif ? "Aktif" : "Pasif");
+}
+const topluDurum = (yol, durum) => async (sec) => {
+  await api(yol, { metod: "POST", veri: { idler: sec.map((x) => x.id), durum } });
+  bildir(`${sec.length} kayıt ${durum === "pasif" ? "pasif yapıldı; seçim listelerinde görünmez" : "yeniden aktif"}.`);
+};
+const pasifSuzgeci = (durumu, yenile) => h("label", { style: "font-size:13px" },
+  h("input", { type: "checkbox", checked: durumu.pasifler, onchange: (e) => { durumu.pasifler = e.target.checked; yenile(); } }), " Pasifleri de göster");
+
 function santiyeListesiAc() {
+  const durumu = { pasifler: false };
   sekmeAc("santiyeler", "Şantiyeler", listeEkrani({
     baslik: "Şantiyeler",
-    kaynak: () => api("/api/santiyeler"),
+    kaynak: async () => (await api("/api/santiyeler")).filter((x) => durumu.pasifler || aktifMi(x)),
+    ustAlan: (yenile) => pasifSuzgeci(durumu, yenile),
     kolonlar: [
-      { alan: "ad", baslik: "Şantiye" }, { alan: "durum", baslik: "Durum", deger: (s) => (s.durum === "aktif" ? "Aktif" : "Tamamlandı") },
+      { alan: "ad", baslik: "Şantiye" },
+      { alan: "durum", baslik: "Durum", deger: (s) => durumDugmesi(s, "/api/santiyeler/durum"), metin: (s) => (aktifMi(s) ? "Aktif" : "Pasif") },
       { alan: "baslangic", baslik: "Başlangıç", tip: "tarih" }, { alan: "bitis", baslik: "Bitiş", tip: "tarih" },
       { alan: "butce", baslik: "Bütçe", tip: "para" }, { alan: "adres", baslik: "Adres" },
       { alan: "eski_adlar", baslik: "Eski adları", deger: (s) => (s.eski_adlar || "").split("\n").join(", ") },
@@ -427,8 +454,43 @@ function santiyeListesiAc() {
     yeni: () => santiyeFormAc(), yeniYazi: "+ Yeni şantiye",
     ac: (x) => santiyeFormAc(x),
     sil: (x) => api(`/api/santiyeler/${x.id}`, { metod: "DELETE" }),
-    toplu: [{ ad: "Seçilenleri sil", tehlikeli: true, islem: (sec) => topluSil(sec, "şantiye", (x) => x.ad, (x) => `/api/santiyeler/${x.id}`) }],
+    toplu: [
+      { ad: "Pasif yap", islem: topluDurum("/api/santiyeler/durum", "pasif") },
+      { ad: "Aktif yap", islem: topluDurum("/api/santiyeler/durum", "aktif") },
+      { ad: "Seçilenleri birleştir", islem: santiyeleriBirlestir },
+      { ad: "Taşeron deposuna çevir", islem: santiyeyiDepoyaCevir },
+      { ad: "Seçilenleri sil", tehlikeli: true, islem: (sec) => topluSil(sec, "şantiye", (x) => x.ad, (x) => `/api/santiyeler/${x.id}`) }],
   }));
+}
+
+// Seçilen şantiyeler tek şantiyede toplanır; bütün kayıtları (faturalar, Wolvox aktarımı, çekler, hareketler, depolar) taşınır
+async function santiyeleriBirlestir(sec) {
+  if (sec.length < 2) { bildir("Birleştirmek için en az iki şantiye seçin.", true); return false; }
+  const hedef = await secimSor("Şantiyeleri birleştir",
+    "Seçilen şantiyelerin bütün faturaları, kalemleri (Wolvox aktarımı dahil), çekleri, hareketleri ve depoları tek şantiyeye geçer. "
+    + "Öteki adlar eski ad olarak saklanır. Hangi ad kalsın?",
+    [...sec.map((s, i) => [s.id, s.ad, i === 0]), [null, "Vazgeç"]]);
+  if (hedef == null) return false;
+  await api(`/api/santiyeler/${hedef}/birlestir`, { metod: "POST", veri: { idler: sec.map((s) => s.id) } });
+  bildir(`${sec.length} şantiye birleştirildi.`);
+  for (const a of ["depolar", "santiye-ozet", "santiye-faturalari"]) listeyiTazele(a);
+}
+
+// Şantiye taşeron deposu olur: kayıtları seçilen şantiyenin içindeki depoya geçer
+async function santiyeyiDepoyaCevir(sec) {
+  if (sec.length !== 1) { bildir("Depoya çevirmek için bir şantiye seçin.", true); return false; }
+  const s = sec[0];
+  const butun = await api("/api/santiyeler");
+  const ustS = h("select", { style: "width:100%;margin-top:8px" }, [["", "— Şantiyesiz depo —"],
+    ...butun.filter((x) => x.id !== s.id).map((x) => [x.id, x.ad])].map(([v, m]) => h("option", { value: v }, m)));
+  const tamam = await secimSor("Taşeron deposuna çevir", h("div", {},
+    h("p", {}, `'${s.ad}' taşeron deposu olacak. Bu şantiyeye yazılmış bütün fatura kalemleri (Wolvox aktarımı dahil) depoya, `
+      + "çek, hareket ve taşeron giderleri seçtiğiniz şantiyeye geçer."),
+    h("b", {}, "Depo hangi şantiyenin içinde olsun?"), ustS), [[true, "Depoya çevir", true], [null, "Vazgeç"]]);
+  if (!tamam) return false;
+  const r = await api(`/api/santiyeler/${s.id}/depoya-cevir`, { metod: "POST", veri: { santiye_id: ustS.value ? Number(ustS.value) : null } });
+  bildir(`'${r.depo}' deposu oldu, ${r.kalem_sayisi} fatura kalemi taşındı.`);
+  for (const a of ["depolar", "santiye-ozet", "santiye-faturalari"]) listeyiTazele(a);
 }
 
 function santiyeFormAc(st = null) {
@@ -438,7 +500,7 @@ function santiyeFormAc(st = null) {
         h("h2", {}, "Şantiye Kartı"),
         h("fieldset", {}, h("legend", {}, "Bilgiler"), h("div", { class: "alanlar" },
           alan("Şantiye adı", "ad", st?.ad, { zorunlu: true }),
-          alan("Durum", "durum", st?.durum, { secenekler: [["aktif", "Aktif"], ["tamamlandi", "Tamamlandı"]] }),
+          alan("Durum", "durum", st?.durum === "tamamlandi" ? "pasif" : st?.durum, { secenekler: [["aktif", "Aktif"], ["pasif", "Pasif (seçim listelerinde görünmez)"]] }),
           alan("Başlangıç", "baslangic", st?.baslangic, { tip: "date" }), alan("Bitiş", "bitis", st?.bitis, { tip: "date" }),
           alan("Bütçe (TL)", "butce", st?.butce, { tip: "number" }),
           alan("Adres", "adres", st?.adres, { cok_satir: true, genis: true }))),
@@ -488,7 +550,7 @@ function depoSecimi() {
     h("option", { value: "" }, "— Depo —"), h("option", { value: "0" }, "Depoyu kaldır (şantiyenin kendisi)"),
     h("option", { value: "__yeni_depo" }, "+ Yeni depo…"));
   const ekle = (d) => sel.insertBefore(h("option", { value: d.id }, depoEtiketi(d)), sel.lastChild);
-  api("/api/depolar").then((liste) => liste.forEach(ekle)).catch(() => {});
+  api("/api/depolar").then((liste) => secimeUygun(liste).forEach(ekle)).catch(() => {});
   sel.addEventListener("focus", () => (sel.dataset.onceki = sel.value));
   sel.addEventListener("change", async () => {
     if (sel.value !== "__yeni_depo") return;
@@ -502,21 +564,26 @@ function depoSecimi() {
 }
 
 function depoListesiAc() {
+  const durumu = { pasifler: false };
   sekmeAc("depolar", "Depolar", listeEkrani({
     baslik: "Depolar (taşeronlar)",
-    kaynak: () => api("/api/depolar"),
+    kaynak: async () => (await api("/api/depolar")).filter((x) => durumu.pasifler || aktifMi(x)),
     kolonlar: [
       { alan: "ad", baslik: "Depo" }, { alan: "santiye_ad", baslik: "Şantiye" },
-      { alan: "cari_unvan", baslik: "Borç yazılan cari" }, { alan: "durum", baslik: "Durum", deger: (d) => (d.durum === "pasif" ? "Pasif" : "Aktif") },
+      { alan: "cari_unvan", baslik: "Borç yazılan cari" },
+      { alan: "durum", baslik: "Durum", deger: (d) => durumDugmesi(d, "/api/depolar/durum"), metin: (d) => (aktifMi(d) ? "Aktif" : "Pasif") },
       { alan: "aciklama", baslik: "Açıklama" },
       { alan: "eski_adlar", baslik: "Eski adları", deger: (d) => (d.eski_adlar || "").split("\n").join(", ") },
     ],
     duzenle: true,
-    ustAlan: () => h("span", { style: "color:#4a5866;font-size:12px" },
-      "Fatura kalemi bir depoya ayrılırsa şantiye raporunda o depo altında görünür; depoya cari bağlıysa kalem o cariye borç yazılır. Depo seçilmeyen kalem şantiyenin kendisine kalır."),
+    ustAlan: (yenile) => h("span", { style: "display:flex;gap:10px;align-items:center" }, pasifSuzgeci(durumu, yenile),
+      h("span", { style: "color:#4a5866;font-size:12px" },
+        "Fatura kalemi bir depoya ayrılırsa şantiye raporunda o depo altında görünür; depoya cari bağlıysa kalem o cariye borç yazılır. Depo seçilmeyen kalem şantiyenin kendisine kalır.")),
     yeni: () => depoFormAc(), yeniYazi: "+ Yeni depo",
     ac: (d) => depoFormAc(d),
     sil: (d) => api(`/api/depolar/${d.id}`, { metod: "DELETE" }),
+    toplu: [{ ad: "Pasif yap", islem: topluDurum("/api/depolar/durum", "pasif") },
+      { ad: "Aktif yap", islem: topluDurum("/api/depolar/durum", "aktif") }],
   }));
 }
 
@@ -608,7 +675,7 @@ function taseronAc(cariId = null) {
         catch (e) { bildir(e.message, true); }
       };
       const silKolonu = [(g) => h("button", { class: "dugme tehlike kucuk", title: "Sil", onclick: () => sil(g) }, "✕"), ""];
-      const santiyeSec = () => h("select", { name: "santiye_id" }, [["", "— Şantiye —"], ...santiyeler.map((x) => [x.id, x.ad])].map(([d, m]) => h("option", { value: d }, m)));
+      const santiyeSec = () => h("select", { name: "santiye_id" }, [["", "— Şantiye —"], ...secimeUygun(santiyeler).map((x) => [x.id, x.ad])].map(([d, m]) => h("option", { value: d }, m)));
       const bugun = new Date().toISOString().slice(0, 10);
       if (durumu.sekme === "paralar") {
         el.append(ACIKLAMA("Taşerona bankadan, kasadan ya da çekle verilen paralar (cariye bağlı tahsilat/ödeme hareketleri)."),
@@ -1023,9 +1090,9 @@ function malzemeListesiAc() {
 }
 
 // ---------------------------------------------------------------- faturalar
-function faturaListesiAc(yon) {
+function faturaListesiAc(yon, ilkSuzgec = "") {
   const ad = yon === "gelen" ? "Alış Faturaları" : "Satış Faturaları";
-  let durumFiltre = "";
+  let durumFiltre = ilkSuzgec;
   // Toplu atama (onaylı faturalar da): şantiye (yazınca yoksa açılır) ve gider türü
   const santiyeK = santiyeSecici();
   const giderS = h("select", {}, [["", "— Gider türü seçin —"], ...BEN.gider_turleri.map((g) => [g, g])].map(([d, m]) => h("option", { value: d }, m)));
@@ -1035,8 +1102,8 @@ function faturaListesiAc(yon) {
     kaynak: () => api(`/api/faturalar?yon=${yon}${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
     ustAlan: (yenile) => h("span", { style: "display:flex;gap:6px" },
       h("select", { onchange: (e) => { durumFiltre = e.target.value; yenile(); } },
-        [["", "Tüm faturalar"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"],
-          ["aktarim", "Wolvox'tan aktarılan geçmiş"]].map(([d, m]) => h("option", { value: d, selected: d === durumFiltre }, m))),
+        [["", "Tüm faturalar"], ["kayitli", "Wolvox aktarımı hariç"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"],
+          ["aktarim", "Wolvox'tan aktarılanlar"]].map(([d, m]) => h("option", { value: d, selected: d === durumFiltre }, m))),
       h("button", { class: "dugme", onclick: async () => {
         try {
           const taslaklar = await api(`/api/faturalar?yon=${yon}&durum=taslak`);
@@ -1218,12 +1285,16 @@ function aramaliSec(sel, { yeniYazi, yeniAc, bosYazi = "", yeniIpucu } = {}) {
   return kutu;
 }
 
+// Pasif şantiye/depo seçim listelerinde görünmez (kalabalık yapmasın); kayıtta zaten seçili olan yine görünür
+const aktifMi = (x) => !x.durum || x.durum === "aktif";
+const secimeUygun = (liste, ...tutulan) => { const t = tutulan.flat().filter(Boolean); return liste.filter((x) => aktifMi(x) || t.includes(x.id)); };
+
 // Toplu atama için şantiye seçici: yazarak aranır, yoksa yazılan adla şantiye açılıp seçilir. Değer kap.secim.value
-function santiyeSecici(santiyeler, bosYazi = "— Şantiye seçin —") {
+function santiyeSecici(santiyeler, bosYazi = "— Şantiye seçin —", tutulan = []) {
   const sel = h("select", {}, h("option", { value: "" }, bosYazi));
   const kap = h("span", { class: "santiye-secici" }, sel);
   kap.secim = sel;
-  const doldur = (liste) => { for (const x of liste) sel.append(h("option", { value: x.id }, x.ad)); sel.tazele?.(); };
+  const doldur = (liste) => { for (const x of secimeUygun(liste, tutulan)) sel.append(h("option", { value: x.id }, x.ad)); sel.tazele?.(); };
   aramaliSec(sel, { yeniYazi: (ad) => `+ "${ad}" adıyla yeni şantiye aç`, bosYazi, yeniIpucu: "Yeni şantiye için adını yazın",
     yeniAc: async (ad) => {
       try {
@@ -1241,7 +1312,7 @@ function santiyeSecici(santiyeler, bosYazi = "— Şantiye seçin —") {
 
 /** Formlarda şantiye alanı: listeden seçilir, yazarak aranır, yoksa yazılan adla açılır (fatura ekranıyla aynı). */
 function santiyeAlani(etiket, deger, santiyeler, bosYazi = "— Şantiye yok —") {
-  const kap = santiyeSecici(santiyeler, bosYazi);
+  const kap = santiyeSecici(santiyeler, bosYazi, [Number(deger)]);
   kap.secim.name = "santiye_id";
   kap.secim.value = deger ?? "";
   kap.secim.tazele?.();
@@ -1332,7 +1403,7 @@ function faturaFormAc(fatura, yon) {
           alan("Cari", "cari_id", f.cari_id, { secenekler: cariSecenek, genis: true }),
           alan("Fatura No", "fatura_no", f.fatura_no), alan("Tarih", "tarih", f.tarih, { tip: "date" }),
           alan("Vade", "vade", f.vade, { tip: "date" }),
-          alan("Şantiye", "santiye_id", f.santiye_id, { secenekler: [["", "— Şantiye yok —"], ...santiyeler.map((x) => [x.id, x.ad]), ["__yeni_santiye", "+ Yeni şantiye…"]] }),
+          alan("Şantiye", "santiye_id", f.santiye_id, { secenekler: [["", "— Şantiye yok —"], ...secimeUygun(santiyeler, f.santiye_id).map((x) => [x.id, x.ad]), ["__yeni_santiye", "+ Yeni şantiye…"]] }),
           alan("Gider Türü", "gider_turu", f.gider_turu, { secenekler: [["", "—"], ...BEN.gider_turleri.map((g) => [g, g])] }),
           alan("Para Birimi", "para_birimi", f.para_birimi),
           alan("Kur (dövizli faturada 1 birim kaç TL)", "kur", f.kur, { tip: "number" }),
@@ -1470,8 +1541,10 @@ function faturaFormAc(fatura, yon) {
       const kalemGovde = h("tbody");
       const toplamAlan = h("div", { class: "toplamlar" });
       const farkKutu = h("div", { class: "hata-kutu", hidden: true });
-      const kalemSantiye = [["", "— Fatura şantiyesi —"], ...santiyeler.map((x) => [x.id, x.ad]), ["__yeni_santiye", "+ Yeni şantiye…"]];
-      const kalemDepo = [["", "— Şantiyenin kendisi —"], ...depolar.map((d) => [d.id, depoEtiketi(d)]), ["__yeni_depo", "+ Yeni depo…"]];
+      const kalemSantiye = [["", "— Fatura şantiyesi —"], ...secimeUygun(santiyeler, (f.kalemler || []).map((k) => k.santiye_id)).map((x) => [x.id, x.ad]),
+        ["__yeni_santiye", "+ Yeni şantiye…"]];
+      const kalemDepo = [["", "— Şantiyenin kendisi —"], ...secimeUygun(depolar, (f.kalemler || []).map((k) => k.depo_id)).map((d) => [d.id, depoEtiketi(d)]),
+        ["__yeni_depo", "+ Yeni depo…"]];
       // Seçili şantiyenin adı değişir; kayıtlar şantiyeye kimlikle bağlı olduğundan yerinde kalır, yalnız görünen ad güncellenir
       const santiyeAdiDegistir = async () => {
         const st = santiyeler.find((x) => String(x.id) === form.elements.santiye_id.value);
@@ -3156,7 +3229,7 @@ function topluCekAc(yon = "alinan") {
             h("th", {}, "Durum"), h("th", {}, ""))),
           govde)),
         h("datalist", { id: "toplu-cek-bankalar" }, BANKA_ADLARI.map((b) => h("option", { value: b }))),
-        h("datalist", { id: "toplu-cek-santiyeler" }, santiyeler.map((x) => h("option", { value: x.ad }))),
+        h("datalist", { id: "toplu-cek-santiyeler" }, secimeUygun(santiyeler).map((x) => h("option", { value: x.ad }))),
         h("div", { class: "dugmeler" },
           h("button", { type: "button", class: "dugme ana", onclick: () => this.kaydet() }, "Tümünü kaydet (F2)"),
           h("button", { type: "button", class: "dugme", onclick: () => this.kaydet(true) }, "Seçilenleri kaydet"),
@@ -4000,7 +4073,7 @@ function kullanicilarAc() {
 
 // ---------------------------------------------------------------- hızlı arama (F3 / Ctrl+K)
 function hizliAramaAc() {
-  if ($(".hizli-arama")) return;
+  if ($(".hizli-arama")) return $(".hizli-arama input").focus();
   const kutu = h("input", { placeholder: "Cari, fatura no, tutar, şantiye, çek no ya da menü adı yazın…", autocomplete: "off" });
   const liste = h("ul", { class: "arama-sonuc" });
   const d = h("dialog", { class: "secim-penceresi hizli-arama" }, kutu, liste,
@@ -4038,9 +4111,14 @@ function hizliAramaAc() {
       imlec = (imlec + (e.key === "ArrowDown" ? 1 : -1) + sonuclar.length) % (sonuclar.length || 1);
       ciz();
     } else if (e.key === "Enter") { e.preventDefault(); if (sonuclar[imlec]) ac(sonuclar[imlec]); }
+    else if (e.key === "Escape") { e.preventDefault(); kapat(); }
     e.stopPropagation();  // F2/Del gibi kısayollar arkadaki ekrana gitmesin
   });
   d.addEventListener("close", () => setTimeout(() => d.remove(), 0));
+  d.addEventListener("mousedown", (e) => {  // pencerenin dışına tıklayınca kapanır
+    const r = d.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) kapat();
+  });
   document.body.append(d);
   d.showModal();
   kutu.focus();
@@ -4379,7 +4457,12 @@ function wolvoxAktarAc() {
           h("tbody", {}, gecmis.map((a) => h("tr", {},
             h("td", {}, tarih(String(a.tarih).slice(0, 10))), h("td", {}, a.dosya || ""), h("td", { class: "sayi" }, a.fatura_sayisi), h("td", { class: "sayi" }, a.atlanan),
             h("td", { class: "sayi" }, para(a.toplam)), h("td", {}, `${a.acilan_santiye} / ${a.acilan_depo}`),
-            h("td", {}, h("button", { class: "dugme tehlike", onclick: async () => {
+            h("td", {}, h("button", { class: "dugme", onclick: () => {
+              const acik = sekmeler.find((s) => s.anahtar === "faturalar-gelen");
+              if (acik) sekmeKapat(acik);  // açık liste Wolvox süzgeciyle yeniden açılsın
+              faturaListesiAc("gelen", "aktarim");
+            } }, "Faturaları göster"), " ",
+              h("button", { class: "dugme tehlike", onclick: async () => {
               if (!confirm(`Bu aktarımın ${a.fatura_sayisi} faturası silinsin mi? Açtığı ve başka yerde kullanılmayan şantiye/depolar da silinir. Önce yedek alınır.`)) return;
               try {
                 durum("Yedek alınıyor ve aktarım geri alınıyor…");

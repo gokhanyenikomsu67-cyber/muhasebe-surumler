@@ -241,6 +241,111 @@ def santiye_guncelle(santiye_id: int, veri: schemas.SantiyeGiris, db: Session = 
     return s
 
 
+def _adlari_ekle(hedef, kaynak) -> None:
+    """Kaynağın adı ve eski adları hedefin eski adlarına eklenir: eski adla gelen belge/Excel hedefe işlenir."""
+    adlar = kural.kayit_adlari(hedef)
+    for x in kural.kayit_adlari(kaynak):
+        if all(kural.ad_anahtari(x) != kural.ad_anahtari(y) for y in adlar):
+            adlar.append(x)
+    hedef.eski_adlar = "\n".join(adlar[1:]) or None
+
+
+def _wolvox_kaydi_tasi(db: Session, sirket_id: int, santiye_id: int, depo_id: int | None = None) -> None:
+    """Wolvox aktarımının açtığı şantiye birleşince/depoya dönünce aktarım listesinden çıkar (geri almada silinmesin);
+    depoya dönüştüyse yeni depo aktarımın açtıkları arasına girer."""
+    from ..models import WolvoxAktarim
+    for a in db.scalars(select(WolvoxAktarim).where(WolvoxAktarim.sirket_id == sirket_id)):
+        if santiye_id in (a.acilan_santiyeler or []):
+            a.acilan_santiyeler = [x for x in a.acilan_santiyeler if x != santiye_id]
+            if depo_id:
+                a.acilan_depolar = [*(a.acilan_depolar or []), depo_id]
+
+
+class SantiyeBirlestir(schemas.BaseModel):
+    idler: list[int]
+
+
+@router.post("/santiyeler/{hedef_id}/birlestir", response_model=schemas.SantiyeCikis)
+def santiye_birlestir(hedef_id: int, istek: SantiyeBirlestir, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Seçilen şantiyeler hedef şantiyede toplanır: faturaları, kalemleri (Wolvox aktarımı dahil), çekleri, hareketleri,
+    depoları ve taşeron giderleri hedefe geçer; adları hedefin eski adı olur, kendileri silinir."""
+    from sqlalchemy import update
+
+    from ..models import Cek, Depo, Hareket, TaseronGider
+    hedef = sirket_kaydi(db, Santiye, hedef_id, k)
+    for sid in set(istek.idler) - {hedef.id}:
+        s = sirket_kaydi(db, Santiye, sid, k)
+        for model in (Fatura, FaturaKalem, Hareket, Cek, Depo, TaseronGider):
+            db.execute(update(model).where(model.santiye_id == s.id).values(santiye_id=hedef.id))
+        _adlari_ekle(hedef, s)
+        _wolvox_kaydi_tasi(db, k.sirket_id, s.id)
+        db.delete(s)
+    db.commit()
+    return hedef
+
+
+class DepoyaCevir(schemas.BaseModel):
+    santiye_id: int | None = None  # deponun bağlanacağı şantiye (boş: şantiyesiz depo)
+    cari_id: int | None = None  # taşeron carisi (isteğe bağlı)
+
+
+@router.post("/santiyeler/{santiye_id}/depoya-cevir")
+def santiye_depoya_cevir(santiye_id: int, istek: DepoyaCevir, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Şantiyeyi taşeron deposu yapar: aynı adla (ya da aynı adlı var olan) depo seçilen şantiyenin içinde açılır;
+    bu şantiyeye yazılmış bütün fatura kalemleri (Wolvox aktarımı dahil) o depoya, çek/hareket/taşeron giderleri
+    seçilen şantiyeye geçer. Şantiyenin kendi depoları da seçilen şantiyeye taşınır. Şantiye silinir."""
+    from sqlalchemy import or_, update
+
+    from ..models import Cek, Depo, Hareket, TaseronGider
+    s = sirket_kaydi(db, Santiye, santiye_id, k)
+    ust = sirket_kaydi(db, Santiye, istek.santiye_id, k) if istek.santiye_id else None
+    if ust is not None and ust.id == s.id:
+        raise HTTPException(400, "Depo kendi şantiyesinin içine alınamaz; başka bir şantiye seçin.")
+    if istek.cari_id:
+        sirket_kaydi(db, Cari, istek.cari_id, k)
+    ust_id = ust.id if ust else None
+    d = next((x for x in db.scalars(select(Depo).where(Depo.sirket_id == k.sirket_id, Depo.santiye_id == ust_id))
+              if kural.adi_bu_mu(x, s.ad)), None)
+    if d is None:
+        d = Depo(sirket_id=k.sirket_id, ad=s.ad, santiye_id=ust_id, cari_id=istek.cari_id)
+        db.add(d)
+        db.flush()
+    elif istek.cari_id and not d.cari_id:
+        d.cari_id = istek.cari_id
+    _adlari_ekle(d, s)
+    # Kalemi bu şantiyede olanlar (kalemin kendi şantiyesi ya da faturanın şantiyesi boş kalemde) depoya geçer
+    kalemler = db.scalars(select(FaturaKalem).join(Fatura).where(Fatura.sirket_id == k.sirket_id, or_(
+        FaturaKalem.santiye_id == s.id, (FaturaKalem.santiye_id.is_(None)) & (Fatura.santiye_id == s.id)))).all()
+    for kl in kalemler:
+        kl.santiye_id = ust_id
+        if kl.depo_id is None:
+            kl.depo_id = d.id
+    db.flush()
+    db.execute(update(TaseronGider).where(TaseronGider.santiye_id == s.id, TaseronGider.depo_id.is_(None)).values(depo_id=d.id))
+    for model in (Fatura, Hareket, Cek, TaseronGider, Depo):
+        db.execute(update(model).where(model.santiye_id == s.id).values(santiye_id=ust_id))
+    _wolvox_kaydi_tasi(db, k.sirket_id, s.id, d.id)
+    db.delete(s)
+    db.commit()
+    return {"depo_id": d.id, "depo": d.ad, "kalem_sayisi": len(kalemler)}
+
+
+class DurumIstegi(schemas.BaseModel):
+    idler: list[int]
+    durum: str  # aktif | pasif
+
+
+@router.post("/santiyeler/durum")
+def santiye_durumu(istek: DurumIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Aktif / pasif: pasif şantiye seçim listelerinde görünmez (kayıtları ve raporları durur), istenince yeniden açılır."""
+    if istek.durum not in ("aktif", "pasif"):
+        raise HTTPException(422, "Durum aktif ya da pasif olmalı.")
+    for i in istek.idler:
+        sirket_kaydi(db, Santiye, i, k).durum = istek.durum
+    db.commit()
+    return {"ok": True}
+
+
 @router.delete("/santiyeler/{santiye_id}")
 def santiye_sil(santiye_id: int, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     s = sirket_kaydi(db, Santiye, santiye_id, k)
