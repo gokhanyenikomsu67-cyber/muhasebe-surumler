@@ -6,6 +6,8 @@ from app.main import app
 from tests.test_api import client, yeni_kullanici
 
 ACIK_UCLAR = {("POST", "/api/kayit"), ("POST", "/api/giris"), ("GET", "/")}
+# WhatsApp köprüsünün uçları kullanıcı oturumuyla değil, köprünün gizli anahtarıyla açılır (girişsiz ve izleyiciyle 401)
+KOPRU_UCLARI = {("POST", "/api/bot/mesaj"), ("POST", "/api/bot/kopru-durum")}
 
 
 def uclar():
@@ -40,7 +42,7 @@ def test_izleyici_hicbir_seyi_degistiremez():
     assert client.post("/api/kullanicilar", json={"ad": "İ", "eposta": eposta, "sifre": "gizli123", "rol": "izleyici"}, headers=h).status_code == 200
     hi = {"Authorization": "Bearer " + client.post("/api/giris", json={"eposta": eposta, "sifre": "gizli123"}).json()["token"]}
     for m, yol in uclar():
-        if m == "GET" or (m, yol) in ACIK_UCLAR or yol in ("/api/cikis",):
+        if m == "GET" or (m, yol) in ACIK_UCLAR | KOPRU_UCLARI or yol in ("/api/cikis",):
             continue
         r = client.request(m, doldur(yol), headers=hi, json={})
         assert r.status_code == 403, f"{m} {yol} izleyiciyle {r.status_code}"

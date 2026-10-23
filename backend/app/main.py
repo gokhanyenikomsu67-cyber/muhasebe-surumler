@@ -14,7 +14,7 @@ from .auth import aktif_kullanici, yazabilir
 from . import gecmis as degisiklik_gecmisi
 from .db import Base, SessionLocal, db_guncelle, engine
 from .models import Kullanici
-from .routers import (aktarim, ana_depo, banka, cekler, faturalar, gecmis, kartlar, kolaylik, malzemeler, mali, mutabakat,
+from .routers import (aktarim, ana_depo, banka, bot as bot_router, cekler, faturalar, gecmis, kartlar, kolaylik, malzemeler, mali, mutabakat,
                       raporlar, reddedilen, taseron, temel, wolvox, yazdir)
 
 Base.metadata.create_all(engine)
@@ -39,6 +39,7 @@ app.include_router(taseron.router)
 app.include_router(malzemeler.router)
 app.include_router(wolvox.router)
 app.include_router(ana_depo.router)
+app.include_router(bot_router.router)
 
 WEB = Path(__file__).resolve().parents[2] / "web"
 app.mount("/web", StaticFiles(directory=WEB), name="web")
@@ -513,3 +514,11 @@ def baslangic():
     from . import guncelleme
     guncelleme.acildi()  # yeni sürüm sorunsuz açıldı: baslat.bat eski sürüme dönmez
     threading.Thread(target=_gunluk_guncelleme_denetimi, daemon=True).start()
+    from . import bot
+    threading.Thread(target=bot.bekci, daemon=True).start()  # WhatsApp botu açık seçildiyse köprüyü çalıştırır
+
+
+@app.on_event("shutdown")
+def kapanis():
+    from . import bot
+    bot.durdur()  # WhatsApp köprüsü programla birlikte kapanır

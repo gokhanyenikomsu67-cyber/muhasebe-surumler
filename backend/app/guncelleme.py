@@ -33,7 +33,7 @@ SONUC = PROGRAM / "guncelleme-sonucu.txt"
 ESKI = PROGRAM / "eski-surum"
 GEREKLI_YER = 100 * 1024 * 1024  # güncelleme için diskte istenen en az boş yer (paket, eski dosyalar, yedek)
 # Güncellemede hiç dokunulmayan yerler (program klasörüne göre)
-KORUNAN = (".env", "backend/.venv", "backend/veri", "eski-surum", "baslat-gunlugu.txt", "guncelleme-bekliyor.txt",
+KORUNAN = (".env", "backend/.venv", "whatsapp/node_modules", "backend/veri", "eski-surum", "baslat-gunlugu.txt", "guncelleme-bekliyor.txt",
            "guncelleme-deneniyor.txt", "guncelleme-sonucu.txt", "yeniden-baslatiliyor.txt", "python312-son-deneme.txt")
 ZAMAN_ASIMI = 8
 

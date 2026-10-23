@@ -403,3 +403,18 @@ class Degisiklik(Base):
     islem: Mapped[str] = mapped_column(String(12))  # eklendi | degisti | onaylandi | iptal | iptal_geri | silindi
     ozet: Mapped[str] = mapped_column(Text)
     alanlar: Mapped[dict | None] = mapped_column(JSON)  # {alan: [eski, yeni]} ya da silinende son hali
+
+
+class BotNumarasi(Base):
+    """WhatsApp botuna soru sorabilecek telefon numarası. Cevaplar bağlı kullanıcının "Görür" yetkisiyle verilir;
+    bot hiçbir kaydı değiştirmez. telefon: yalnız rakamlar, ülke koduyla (905321234567). kimlik: WhatsApp'ın grupta
+    numara yerine gösterdiği gizli kimlik (ilk tanınmayan mesajdan eklenir)."""
+    __tablename__ = "bot_numaralari"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    ad: Mapped[str] = mapped_column(String(100))
+    telefon: Mapped[str | None] = mapped_column(String(30), index=True)
+    kimlik: Mapped[str | None] = mapped_column(String(60), index=True)
+    kullanici_id: Mapped[int] = mapped_column(ForeignKey("kullanicilar.id"))
+    aktif: Mapped[bool] = mapped_column(Boolean, default=True)
+    kullanici: Mapped[Kullanici] = relationship()

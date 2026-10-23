@@ -4196,6 +4196,110 @@ function kullanicilarAc() {
   });
 }
 
+// ---------------------------------------------------------------- soru sor + WhatsApp botu
+function soruSorAc() {
+  sekmeAc("soru-sor", "Soru Sor", {
+    ciz(el) {
+      const kutu = h("input", { placeholder: "ör. GEBZE şantiye harcaması bu ay, ABC bakiye, bu hafta çekler, banka bakiyeleri", style: "flex:1;min-width:280px" });
+      const cevap = h("pre", { class: "bot-cevap" });
+      const sor = async (e) => {
+        e?.preventDefault();
+        if (!kutu.value.trim()) return;
+        try { cevap.textContent = (await api("/api/bot/sor?metin=" + encodeURIComponent(kutu.value))).cevap.replace(/[*_]/g, ""); }
+        catch (x) { bildir(x.message, true); }
+      };
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Soru Sor")),
+        h("form", { class: "liste-ust", onsubmit: sor }, kutu, h("button", { class: "dugme ana" }, "Sor")), cevap,
+        ACIKLAMA("WhatsApp botu da aynı cevabı verir. Cevaplar programdaki onaylı kayıtlardan, yapay zeka kullanılmadan hesaplanır; yetkiniz olmayan bölümün bilgisi gösterilmez."));
+      kutu.focus();
+    },
+  });
+}
+
+const BOT_DURUMLARI = { kapali: "Kapalı", kurulu_degil: "Kurulu değil", baslatiliyor: "Başlatılıyor…", baglaniyor: "Bağlanıyor…",
+  qr: "QR okutulmayı bekliyor", bagli: "Bağlı", cikis: "Bağlantı kaldırıldı", hata: "Hata" };
+
+function whatsappBotuAc() {
+  sekmeAc("whatsapp-botu", "WhatsApp Botu", {
+    async ciz(el) {
+      let d, numaralar, kullanicilar;
+      try {
+        [d, numaralar, kullanicilar] = await Promise.all([api("/api/bot/durum"), api("/api/bot/numaralar"), api("/api/kullanicilar")]);
+      } catch (e) { return bildir(e.message, true); }
+      const islem = async (fn, mesaj) => { try { await fn(); if (mesaj) bildir(mesaj); yenidenCiz(); } catch (e) { bildir(e.message, true); } };
+      const durumYazi = BOT_DURUMLARI[d.durum] || d.durum;
+      const dugmeler = [];
+      if (!d.kurulu) {
+        if (d.kurulum?.durum === "kuruluyor") dugmeler.push(h("span", {}, "Kuruluyor (birkaç dakika sürebilir)…"));
+        else dugmeler.push(h("button", { class: "dugme ana", onclick: () => islem(() => api("/api/bot/kur", { metod: "POST" }), "Kurulum başladı.") }, "Kur"));
+        if (d.kurulum?.durum === "hata") dugmeler.push(h("span", { class: "kirmizi" }, d.kurulum.hata));
+      } else if (!d.acik) {
+        dugmeler.push(h("button", { class: "dugme ana", onclick: () => islem(() => api("/api/bot/ac", { metod: "POST" }), "Bot açılıyor.") }, "Botu aç"));
+      } else {
+        dugmeler.push(h("button", { class: "dugme", onclick: () => islem(() => api("/api/bot/kapat", { metod: "POST" }), "Bot kapatıldı.") }, "Botu kapat"));
+      }
+      if (d.numara || d.durum === "bagli") dugmeler.push(h("button", { class: "dugme tehlike", onclick: () =>
+        confirm("Botun WhatsApp bağlantısı kaldırılsın mı? Yeniden açınca yeni QR okutmanız gerekir.") &&
+        islem(() => api("/api/bot/cikis", { metod: "POST" }), "Bağlantı kaldırıldı.") }, "Numarayı ayır"));
+      const durumKutusu = h("div", { class: "uyari-satiri" }, h("b", {}, `Durum: ${durumYazi}`),
+        d.numara ? h("span", {}, `Bot numarası: +${d.numara}`) : null, d.hata ? h("span", { class: "kirmizi" }, d.hata) : null, ...dugmeler);
+      const qr = d.durum === "qr" && d.qr ? h("div", { class: "bot-qr" }, h("img", { src: d.qr, alt: "QR" }),
+        h("div", {}, h("b", {}, "Botun telefonunda:"), h("ol", {},
+          h("li", {}, "WhatsApp'ı açın (bot için aldığınız ayrı hat)."),
+          h("li", {}, "Ayarlar > Bağlı cihazlar > Cihaz bağla'ya dokunun."),
+          h("li", {}, "Bu QR'ı okutun. Bir kez yapılır.")))) : "";
+
+      const kullaniciSec = (secili) => h("select", { name: "kullanici_id", required: true },
+        kullanicilar.kullanicilar.map((x) => h("option", { value: x.id, selected: x.id === secili }, x.ad + (x.rol === "sahip" ? " (her şeyi görür)" : ""))));
+      const satirlar = numaralar.map((n) => h("tr", {}, h("td", {}, n.ad), h("td", {}, n.telefon ? "+" + n.telefon : "(yalnız WhatsApp kimliği)"),
+        h("td", {}, n.kullanici || "-"), h("td", {}, n.aktif ? "Cevap verilir" : "Kapalı"),
+        h("td", {}, h("button", { class: "dugme", onclick: () => islem(() => api(`/api/bot/numaralar/${n.id}`, { metod: "PUT", veri: { ...n, aktif: !n.aktif } })) },
+          n.aktif ? "Kapat" : "Aç"),
+          h("button", { class: "dugme tehlike", onclick: () => confirm(`${n.ad} silinsin mi?`) && islem(() => api(`/api/bot/numaralar/${n.id}`, { metod: "DELETE" }), "Silindi.") }, "Sil"))));
+      const form = h("form", { class: "liste-ust", onsubmit: (e) => {
+        e.preventDefault();
+        const v = formVerisi(form);
+        islem(() => api("/api/bot/numaralar", { metod: "POST", veri: { ...v, kullanici_id: Number(v.kullanici_id) } }), "Numara eklendi.");
+      } }, h("b", {}, "Yeni kişi:"), h("input", { name: "ad", placeholder: "Ad (ör. Patron 1)", required: true }),
+        h("input", { name: "telefon", placeholder: "Telefon (0532 123 45 67)", required: true }),
+        h("label", {}, "Hangi kullanıcının yetkisiyle: ", kullaniciSec(kullanicilar.kullanicilar.find((x) => x.ben)?.id)),
+        h("button", { class: "dugme ana" }, "Ekle"));
+      const taninmayan = d.taninmayanlar.length ? h("div", {}, h("h3", {}, "Yazan ama listede olmayanlar (cevap verilmedi)"),
+        h("table", { class: "liste" }, h("tbody", {}, d.taninmayanlar.slice().reverse().map((t) => h("tr", {},
+          h("td", {}, t.zaman), h("td", {}, t.ad || "-"), h("td", {}, (t.alt || t.gonderen).split("@")[0]), h("td", {}, t.metin),
+          h("td", {}, h("button", { class: "dugme", onclick: () => {
+            const ad = prompt("Bu kişinin adı:", t.ad || "");
+            if (!ad) return;
+            const tel = [t.alt, t.gonderen].find((x) => x && x.includes("@s.whatsapp.net"));
+            const lid = [t.alt, t.gonderen].find((x) => x && x.endsWith("@lid"));
+            islem(() => api("/api/bot/numaralar", { metod: "POST", veri: { ad, telefon: tel || null, kimlik: lid || null,
+              kullanici_id: kullanicilar.kullanicilar.find((x) => x.ben).id } }), `${ad} eklendi.`);
+          } }, "Ekle"))))))) : "";
+
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "WhatsApp Botu")), durumKutusu, qr,
+        h("h3", {}, "Soru sorabilecek kişiler"),
+        h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Ad", "Telefon", "Yetkisi", "Durum", ""].map((b) => h("th", {}, b)))), h("tbody", {}, satirlar))),
+        form, taninmayan,
+        ACIKLAMA("Bot için ayrı bir hat kullanın ve bu numarayı WhatsApp grubunuza ekleyin. Program açıkken bot, listedeki kişilerin sorularına (ör. \"GEBZE şantiye harcaması\", \"ABC bakiye\", \"bu hafta çekler\", \"banka bakiyeleri\", \"yardım\") programdaki verilerle cevap verir. Bot yalnız bilgi verir, hiçbir kaydı değiştirmez; kişi, seçilen kullanıcının göremediği bölümü soramaz. Cevaplar WhatsApp üzerinden gider. Bu yol WhatsApp'ın resmi iş yolu değildir; ana hattınızı kullanmayın."));
+      // QR ve bağlantı durumu değiştikçe ekran kendini yeniler
+      if (["qr", "baslatiliyor", "baglaniyor"].includes(d.durum) || d.kurulum?.durum === "kuruluyor") {
+        const once = JSON.stringify([d.durum, d.qr, d.kurulum?.durum]);
+        const bekle = async () => {
+          if (!el.isConnected) return;
+          try {
+            const y = await api("/api/bot/durum");
+            if (JSON.stringify([y.durum, y.qr, y.kurulum?.durum]) !== once) return yenidenCiz();
+          } catch { /* bir sonraki denemede */ }
+          setTimeout(bekle, 3000);
+        };
+        setTimeout(bekle, 3000);
+      }
+    },
+    yenile: () => yenidenCiz(),
+  });
+}
+
 // ---------------------------------------------------------------- hızlı arama (F3 / Ctrl+K)
 function hizliAramaAc() {
   if ($(".hizli-arama")) return $(".hizli-arama input").focus();
@@ -4678,7 +4782,7 @@ const MODULLER = [
     ["Tahsilat / Ödeme", hareketListesiAc], ["Hesaplar Arası Transferler", virmanRaporuAc], ["Mutabakat", mutabakatAc]]],
   ["Mali Raporlar", [["KDV Özeti", kdvOzetiAc], ["Tevkifat Raporu", tevkifatRaporuAc], ["Stopaj Raporu", stopajRaporuAc], ["Ba-Bs Formları", babsAc], ["Gelir-Gider Tablosu", gelirGiderAc],
     ["Yaşlandırma (Vade Analizi)", yaslandirmaAc]]],
-  ["Araçlar", [["Excel İşlemleri", excelIslemleriAc], ["Yedekler", yedeklerAc], ["Firma Bilgileri", firmaBilgileriAc], ["Kullanıcılar", kullanicilarAc], ["Değişiklik Geçmişi", () => gecmisAc()],
+  ["Araçlar", [["Excel İşlemleri", excelIslemleriAc], ["Yedekler", yedeklerAc], ["Firma Bilgileri", firmaBilgileriAc], ["Kullanıcılar", kullanicilarAc], ["Soru Sor", soruSorAc], ["WhatsApp Botu", whatsappBotuAc], ["Değişiklik Geçmişi", () => gecmisAc()],
     ["Güncellemeleri Denetle", guncellemeleriDenetle], ["Verileri Sıfırla", verileriSifirla]]],
 ];
 // Kullanıcının bölüm yetkisi (sunucu da denetler; burada yalnız menü ve düğmeler süzülür)
@@ -4687,7 +4791,7 @@ const GRUP_BOLUMU = { "Fatura": "fatura", "Malzeme": "malzeme", "Cari": "cari", 
   "Banka / Kasa": "banka", "Mali Raporlar": "rapor" };
 const MENU_BOLUMU = { "Ödeme Takvimi / Nakit Akışı": "banka", "Düzenli Ödemeler": "banka", "Taşeron Hesabı": "santiye", "Mutabakat": "cari",
   "Yedekler": "araclar", "Değişiklik Geçmişi": "araclar", "Hızlı Arama (F3)": null, "Excel İşlemleri": null, "Firma Bilgileri": null,
-  "Kullanıcılar": null, "Güncellemeleri Denetle": null, "Verileri Sıfırla": "sahip" };
+  "Kullanıcılar": null, "Soru Sor": null, "WhatsApp Botu": "sahip", "Güncellemeleri Denetle": null, "Verileri Sıfırla": "sahip" };
 function menuGorunur(grup, ad) {
   const b = ad in MENU_BOLUMU ? MENU_BOLUMU[ad] : GRUP_BOLUMU[grup];
   return b === "sahip" ? BEN.rol === "sahip" : yetkiVar(b);

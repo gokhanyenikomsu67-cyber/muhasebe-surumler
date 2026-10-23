@@ -272,3 +272,7 @@ table.yetki-tablo { border-collapse: collapse; margin: 8px 0; }
 table.yetki-tablo th, table.yetki-tablo td { border: 1px solid var(--cizgi, #c9d3dd); padding: 4px 10px; text-align: center; }
 table.yetki-tablo td:first-child, table.yetki-tablo th:first-child { text-align: left; }
 .etiket.aktarim { background: #e8eaf6; color: #303f9f; border: 1px solid #9fa8da; }
+.kirmizi { color: var(--hata); font-weight: bold; }
+.bot-cevap { background: #fff; border: 1px solid #ccd; padding: 10px 12px; white-space: pre-wrap; font-family: inherit; font-size: 13px; min-height: 60px; max-width: 760px; }
+.bot-qr { display: flex; gap: 16px; align-items: flex-start; margin: 8px 0 12px; }
+.bot-qr img { width: 260px; height: 260px; border: 1px solid #ccd; background: #fff; }

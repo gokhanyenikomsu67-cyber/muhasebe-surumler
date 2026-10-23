@@ -89,6 +89,23 @@ Bu modda her işlem için giriş zorunludur; oturum 30 gün sonra kapanır, 5 ha
 
 [Google Drive masaüstü uygulamasını](https://www.google.com/drive/download/) kurun. Araçlar > Yedekler > "Yedek klasörleri"nden Drive klasörünüzü ekleyin. Yedekler seçilen bütün klasörlere gider.
 
+## WhatsApp botu (soru-cevap)
+
+Patronlar WhatsApp grubunda "GEBZE şantiye harcaması bu ay", "ABC bakiye", "bu hafta çekler", "banka bakiyeleri",
+"kime borçluyuz", "genel durum" ya da "yardım" yazınca program kendi verisinden cevap yazar (yapay zeka gerekmez).
+Programda aynı soruları **Araçlar > Soru Sor** ile deneyebilirsiniz.
+
+Kurulum (bir kez, ofisteki ana bilgisayarda, sahip hesabıyla):
+1. Bot için ayrı bir hat alın, bir telefonda WhatsApp'ı bu hatla açın ve hattı gruba ekleyin. Ana hattınızı kullanmayın
+   (bu yol WhatsApp'ın resmi iş yolu değildir).
+2. **Araçlar > WhatsApp Botu**: "Kur" (Node.js ve bağlantı paketi kurulur), sonra "Botu aç".
+3. Ekranda çıkan QR'ı botun telefonunda WhatsApp > Ayarlar > Bağlı cihazlar > Cihaz bağla ile okutun.
+4. "Soru sorabilecek kişiler"e patronların numarasını ve hangi kullanıcının yetkisiyle cevap alacaklarını ekleyin.
+
+Bot yalnız listedeki numaralara, yalnız bilgi verir; hiçbir kaydı değiştirmez ve kişinin bağlı kullanıcısının göremediği
+bölümü (ör. banka) göstermez. Program açık olduğu sürece çalışır. Listede olmayan biri yazarsa cevap verilmez, ekranda
+"Ekle" düğmesiyle görünür.
+
 ## Geliştirici notları
 
 ```

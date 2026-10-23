@@ -25,9 +25,12 @@ _ACIK = [
     ("GET", r"ben|ara|sistem-durumu|hareket-turleri|sirket|kullanicilar"),
     ("GET", r"(cariler|santiyeler|depolar|banka-hesaplari)"),
     ("GET", r"cariler/(benzer|kontrol)|faturalar/(sonraki-no|tcmb-kuru)"),
+    # Soru kutusu cevapta bölüm yetkisini kendisi denetler; köprü uçları gizli anahtarla (routers/bot.py)
+    ("GET", r"bot/sor"),
+    ("POST", r"bot/(mesaj|kopru-durum)"),
 ]
 # Sahip denetimi uçta yapılır (kullanıcı ekleme, firma bilgisi, sistem işlemleri)
-_SAHIP_UCTA = [(None, r"kullanicilar(/.*)?|sirket|sistem/.*|yedekler/(geri-yukle|sil)")]
+_SAHIP_UCTA = [(None, r"kullanicilar(/.*)?|sirket|sistem/.*|yedekler/(geri-yukle|sil)|bot/(numaralar(/.*)?|durum|kur|ac|kapat|cikis)")]
 
 BOLUM_KURALLARI = [
     ("fatura", r"faturalar(/.*)?|reddedilen-faturalar(/.*)?|wolvox(/.*)?|excel/(faturalar|fatura-).*|yazdir/fatura/.*"),

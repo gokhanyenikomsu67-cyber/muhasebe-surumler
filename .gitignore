@@ -5,3 +5,4 @@ backend/.venv/
 .pytest_cache/
 .env
 baslat-gunlugu.txt
+whatsapp/node_modules/
