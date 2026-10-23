@@ -1048,6 +1048,109 @@ function malzemeRaporuAc(yon = "gelen") {
   });
 }
 
+// ---------------------------------------------------------------- Ana Depo
+// Alış faturalarının bütün malzemeleri ana depoya girer; kalemde (ya da faturada) şantiye yazılıysa o şantiyeye çıkmış sayılır.
+// Ana depoda bekleyen malzeme buradan seçilip şantiyeye çıkarılır, yanlış çıkış ana depoya geri alınır.
+function anaDepoAc() {
+  const f = { baslangic: "", bitis: "", ara: "", santiye: "", sekme: "ozet" };
+  const secili = new Set(), acik = new Set();
+  const sorgu = () => new URLSearchParams(Object.entries({ baslangic: f.baslangic, bitis: f.bitis }).filter(([, v]) => v)).toString();
+  const miktar = (v, b) => `${Number(v).toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${b === "-" ? "" : b}`;
+  sekmeAc("ana-depo", "Ana Depo", {
+    async ciz(el) {
+      let v, santiyeler;
+      try { [v, santiyeler] = await Promise.all([api(`/api/ana-depo?${sorgu()}`), api("/api/santiyeler")]); }
+      catch (e) { return bildir(e.message, true); }
+      const anahtar = aramaAnahtari(f.ara);
+      const uyar = (x) => !anahtar || anahtar.split(" ").every((k) => aramaAnahtari(`${x.malzeme} ${x.kalem || ""} ${x.firma || ""} ${x.fatura_no || ""} ${x.santiye || ""}`).includes(k));
+      const tarihK = (alan) => h("input", { type: "date", value: f[alan], onchange: (e) => { f[alan] = e.target.value; yenidenCiz(); } });
+      const araK = h("input", { type: "search", value: f.ara, placeholder: "Malzeme, firma, fatura no…", style: "min-width:220px",
+        onchange: (e) => { f.ara = e.target.value; yenidenCiz(); } });
+      const sekme = (ad, yazi) => h("button", { class: `dugme${f.sekme === ad ? " ana" : ""}`, onclick: () => { f.sekme = ad; secili.clear(); yenidenCiz(); } }, yazi);
+      const bekleyen = v.satirlar.filter((x) => x.yer === "ana");
+      const toplam = (l, a) => l.reduce((t, x) => t + (x[a] || 0), 0);
+      el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, "Ana Depo"),
+          "Tarih:", tarihK("baslangic"), "–", tarihK("bitis"), araK,
+          h("button", { class: "dugme", onclick: () => { Object.assign(f, { baslangic: "", bitis: "", ara: "", santiye: "" }); yenidenCiz(); } }, "Temizle"),
+          h("button", { class: "dugme", onclick: () => this.excel() }, "Excel'e aktar (F9)")),
+        h("div", { class: "kartlar", style: "display:flex;gap:10px;flex-wrap:wrap;margin:6px 0" },
+          ...[["Ana depoya giren", toplam(v.ozet, "giren_tutar")], ["Şantiyelere çıkan", toplam(v.ozet, "cikan_tutar")],
+            ["Ana depoda kalan", toplam(v.ozet, "kalan_tutar")]].map(([a, t]) => h("div", { class: "kutu", style: "padding:8px 14px;border:1px solid var(--gri-kenar);background:#fff" },
+            h("div", { style: "color:#4a5866;font-size:12px" }, a), h("b", {}, para(t), " TL")))),
+        h("div", { style: "display:flex;gap:6px;margin:6px 0" }, sekme("ozet", "Malzeme özeti"), sekme("cikis", "Şantiyelere çıkışlar"),
+          sekme("bekleyen", `Ana depoda bekleyenler (${bekleyen.length})`), sekme("hepsi", "Bütün giriş ve çıkışlar")));
+
+      if (f.sekme === "ozet") {
+        const govde = [];
+        for (const x of v.ozet.filter(uyar)) {
+          const k = `${x.malzeme_id || x.malzeme}|${x.birim}`;
+          govde.push(h("tr", { style: "cursor:pointer", title: "Giriş ve çıkışları görmek için tıklayın", onclick: () => { acik.has(k) ? acik.delete(k) : acik.add(k); yenidenCiz(); } },
+            h("td", { style: "white-space:normal;min-width:220px" }, `${acik.has(k) ? "▾" : "▸"} ${x.malzeme}`),
+            h("td", { class: "sayi" }, miktar(x.giren_miktar, x.birim)), h("td", { class: "sayi" }, para(x.giren_tutar)),
+            h("td", { class: "sayi" }, miktar(x.cikan_miktar, x.birim)), h("td", { class: "sayi" }, para(x.cikan_tutar)),
+            h("td", { class: "sayi", style: "font-weight:600" }, miktar(x.kalan_miktar, x.birim)), h("td", { class: "sayi" }, para(x.kalan_tutar)),
+            h("td", { class: "sayi" }, x.santiye_sayisi || "")));
+          if (acik.has(k)) for (const r of v.satirlar.filter((r) => (r.malzeme_id || r.malzeme) === (x.malzeme_id || x.malzeme) && r.birim === x.birim)) {
+            govde.push(h("tr", { ondblclick: () => faturaFormAc({ id: r.fatura_id }, null) },
+              h("td", { style: "white-space:normal;padding-left:24px;color:#4a5866" }, `${tarih(r.tarih)} · ${r.fatura_no || ""} · ${r.firma || ""} · ${r.kalem}`),
+              h("td", { class: "sayi" }, miktar(r.miktar, r.birim)), h("td", { class: "sayi" }, para(r.tutar)),
+              h("td", { colspan: 2, style: r.yer === "ana" ? "color:#8a6100" : "" }, r.yer === "ana" ? "Ana depoda" : `→ ${r.santiye}${r.depo ? ` / ${r.depo}` : ""}`),
+              h("td", { colspan: 3 })));
+          }
+        }
+        el.append(h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Malzeme", "Giren", "Giren tutar", "Şantiyelere çıkan", "Çıkan tutar", "Ana depoda kalan", "Kalan tutar", "Şantiye"]
+            .map((b, i) => h("th", { class: i ? "sayi" : "" }, b)))), h("tbody", {}, govde.slice(0, 3000)))));
+      } else if (f.sekme === "cikis") {
+        const santiyeS = h("select", { onchange: (e) => { f.santiye = e.target.value; yenidenCiz(); } },
+          [["", "— Bütün şantiyeler —"], ...[...new Map(v.cikislar.map((x) => [String(x.santiye_id), x.santiye])).entries()]]
+            .map(([d, m]) => h("option", { value: d, selected: d === f.santiye }, m)));
+        const liste = v.cikislar.filter((x) => (!f.santiye || String(x.santiye_id) === f.santiye) && uyar(x));
+        el.append(h("p", {}, "Şantiye: ", santiyeS),
+          raporTablosu([["santiye", "Şantiye"], ["malzeme", "Malzeme"], [(x) => miktar(x.miktar, x.birim), "Miktar"], ["tutar", "Tutar (KDV hariç)", "para"],
+            ["kalem_sayisi", "Kalem"], ["son_tarih", "Son çıkış", "tarih"]], liste, { toplam: ["tutar"],
+            ac: (x) => { f.sekme = "hepsi"; f.ara = x.malzeme; yenidenCiz(); } }),
+          ACIKLAMA("Satıra çift tıklayınca o malzemenin bütün giriş ve çıkışları açılır."));
+      } else {
+        const liste = (f.sekme === "bekleyen" ? bekleyen : v.satirlar).filter(uyar);
+        const gorunen = liste.slice(0, 1500);
+        const santiyeK = santiyeSecici(santiyeler, "— Hangi şantiyeye? —");
+        const sevk = async (santiyeId) => {
+          if (!secili.size) return bildir("Önce satırları işaretleyin.", true);
+          try {
+            const r = await api("/api/ana-depo/sevk", { metod: "POST", veri: { kalem_idler: [...secili], santiye_id: santiyeId } });
+            bildir(santiyeId ? `${r.tasinan} kalem '${r.yer}' şantiyesine çıkarıldı.` : `${r.tasinan} kalem ana depoya geri alındı.`);
+            secili.clear();
+            for (const a of ["santiye-ozet", "santiye-faturalari", "rapor-malzeme-gelen"]) listeyiTazele(a);
+            yenidenCiz();
+          } catch (e) { bildir(e.message, true); }
+        };
+        const tumu = h("input", { type: "checkbox", title: "Görünenlerin hepsini seç", checked: gorunen.length > 0 && gorunen.every((x) => secili.has(x.kalem_id)),
+          onchange: (e) => { gorunen.forEach((x) => (e.target.checked ? secili.add(x.kalem_id) : secili.delete(x.kalem_id))); yenidenCiz(); } });
+        el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("span", {}, `${secili.size} seçili`), santiyeK,
+            h("button", { class: "dugme ana", onclick: () => (santiyeK.secim.value ? sevk(Number(santiyeK.secim.value)) : bildir("Şantiyeyi seçin.", true)) }, "Seçilenleri şantiyeye çıkar"),
+            f.sekme === "hepsi" ? h("button", { class: "dugme", onclick: () => sevk(null) }, "Seçilenleri ana depoya geri al") : ""),
+          h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+            h("thead", {}, h("tr", {}, h("th", {}, tumu), ...["Tarih", "Fatura No", "Firma", "Malzeme", "Miktar", "Tutar", "Nerede"].map((b) => h("th", {}, b)))),
+            h("tbody", {}, gorunen.map((x) => h("tr", { ondblclick: () => faturaFormAc({ id: x.fatura_id }, null) },
+              h("td", {}, h("input", { type: "checkbox", checked: secili.has(x.kalem_id),
+                onchange: (e) => { e.target.checked ? secili.add(x.kalem_id) : secili.delete(x.kalem_id); yenidenCiz(); } })),
+              h("td", {}, tarih(x.tarih)), h("td", {}, x.fatura_no || "", x.wolvox ? h("span", { class: "etiket aktarim", style: "margin-left:4px" }, "Wolvox") : ""),
+              h("td", { style: "white-space:normal" }, x.firma || ""),
+              h("td", { style: "white-space:normal;min-width:200px" }, x.malzeme, x.kalem !== x.malzeme ? h("div", { style: "color:#4a5866;font-size:12px" }, x.kalem) : ""),
+              h("td", { class: "sayi" }, miktar(x.miktar, x.birim)), h("td", { class: "sayi" }, para(x.tutar)),
+              h("td", { style: x.yer === "ana" ? "color:#8a6100" : "" }, x.yer === "ana" ? "Ana depoda" : `${x.santiye}${x.depo ? ` / ${x.depo}` : ""}`)))))),
+          liste.length > gorunen.length ? h("p", {}, `${liste.length} satırdan ilk ${gorunen.length} tanesi gösteriliyor; aramayla daraltın.`) : "",
+          ACIKLAMA("Şantiyesi yazılmamış alış kalemleri ana depoda bekler. İşaretleyip şantiyeye çıkardığınızda o kalem şantiyenin raporlarına da geçer. "
+            + "Adı \"ANA DEPO\" ya da \"MERKEZ DEPO\" olan şantiye ana deponun kendisi sayılır."));
+      }
+      durum(`${v.ozet.length} malzeme, ${bekleyen.length} kalem ana depoda`);
+    },
+    yenile: () => yenidenCiz(),
+    excel: () => indir(`/api/excel/ana-depo?${sorgu()}`, "ana-depo.xlsx"),
+  });
+}
+
 function malzemeListesiAc() {
   const secili = new Set();
   sekmeAc("malzeme-kartlari", "Malzeme Kartları", {
@@ -4540,7 +4643,7 @@ function wolvoxAktarAc() {
 const MODULLER = [
   ["Fatura", [["Belgeden Fatura Oku", aiOkumaAc], ["Alış Faturaları", () => faturaListesiAc("gelen")], ["Satış Faturaları", () => faturaListesiAc("giden")],
     ["Wolvox'tan Aktar", wolvoxAktarAc]]],
-  ["Malzeme", [["Malzeme Bazlı Alışlar", () => malzemeRaporuAc("gelen")], ["Malzeme Bazlı Satışlar", () => malzemeRaporuAc("giden")],
+  ["Malzeme", [["Ana Depo", anaDepoAc], ["Malzeme Bazlı Alışlar", () => malzemeRaporuAc("gelen")], ["Malzeme Bazlı Satışlar", () => malzemeRaporuAc("giden")],
     ["Benzer Malzemeleri Eşleştir", malzemeEslestirmeAc], ["Malzeme Kartları", malzemeListesiAc]]],
   ["Günlük Takip", [["Hızlı Arama (F3)", () => hizliAramaAc()], ["Ödeme Takvimi / Nakit Akışı", odemeTakvimiAc], ["Düzenli Ödemeler", duzenliOdemelerAc]]],
   ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Taşeron Hesabı", () => taseronAc()], ["Mutabakat", mutabakatAc]]],

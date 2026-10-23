@@ -14,8 +14,8 @@ from .auth import aktif_kullanici, yazabilir
 from . import gecmis as degisiklik_gecmisi
 from .db import Base, SessionLocal, db_guncelle, engine
 from .models import Kullanici
-from .routers import (aktarim, banka, cekler, faturalar, gecmis, kartlar, kolaylik, malzemeler, mali, mutabakat, raporlar,
-                      reddedilen, taseron, temel, wolvox, yazdir)
+from .routers import (aktarim, ana_depo, banka, cekler, faturalar, gecmis, kartlar, kolaylik, malzemeler, mali, mutabakat,
+                      raporlar, reddedilen, taseron, temel, wolvox, yazdir)
 
 Base.metadata.create_all(engine)
 degisiklik_gecmisi.kur(SessionLocal)
@@ -38,6 +38,7 @@ app.include_router(reddedilen.router)
 app.include_router(taseron.router)
 app.include_router(malzemeler.router)
 app.include_router(wolvox.router)
+app.include_router(ana_depo.router)
 
 WEB = Path(__file__).resolve().parents[2] / "web"
 app.mount("/web", StaticFiles(directory=WEB), name="web")

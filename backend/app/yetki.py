@@ -31,7 +31,7 @@ _SAHIP_UCTA = [(None, r"kullanicilar(/.*)?|sirket|sistem/.*|yedekler/(geri-yukle
 
 BOLUM_KURALLARI = [
     ("fatura", r"faturalar(/.*)?|reddedilen-faturalar(/.*)?|wolvox(/.*)?|excel/(faturalar|fatura-).*|yazdir/fatura/.*"),
-    ("malzeme", r"malzemeler(/.*)?|(raporlar|excel)/malzeme"),
+    ("malzeme", r"malzemeler(/.*)?|(raporlar|excel)/malzeme|ana-depo(/.*)?|excel/ana-depo"),
     ("cari", r"cariler(/.*)?|excel/(cariler|cari-).*|raporlar/cari-.*|yazdir/(cari-ekstre|mutabakat).*|mutabakat"),
     ("santiye", r"santiyeler(/.*)?|depolar(/.*)?|taseron.*|(raporlar|excel)/(santiye-|depo-|taseron).*"),
     ("cek", r"cekler(/.*)?|excel/(cekler|cek-).*|raporlar/cekler|yazdir/cek-.*"),
@@ -42,7 +42,7 @@ BOLUM_KURALLARI = [
 ]
 _SIL = {"sil", "toplu-sil", "okunamayanlar"}
 _DUZENLE = {"iptal", "iptal-geri", "iptal-et", "toplu-guncelle", "toplu-islem", "islem", "karsi-hesap", "esle",
-            "birlestir", "ad-cikar", "odendi", "depoya-cevir", "durum"}
+            "birlestir", "ad-cikar", "odendi", "depoya-cevir", "durum", "sevk"}
 # Kayıt açmak için gereken yardımcı kayıtlar: fatura/çek/banka girebilen, oradan yeni cari/şantiye de açabilir
 _YARDIMCI = {"cari", "santiye"}
 _GIRIS_BOLUMLERI = {"fatura", "cek", "banka", "santiye", "cari"}
