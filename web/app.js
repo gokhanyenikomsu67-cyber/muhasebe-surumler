@@ -1421,7 +1421,8 @@ function aramaliSec(sel, { yeniYazi, yeniAc, bosYazi = "", yeniIpucu } = {}) {
   sel.tazele = tazele;
   sel.addEventListener("change", tazele);
   let satirlar = [], imlec = 0;
-  const sec = (deger) => { sel.value = String(deger); sel.dispatchEvent(new Event("change", { bubbles: true })); liste.hidden = true; tazele(); };
+  // Kutu önce güncellenir: change ile ekran yeniden çizilirse kutunun "blur"u seçimi boş sanıp silmesin
+  const sec = (deger) => { sel.value = String(deger); liste.hidden = true; tazele(); sel.dispatchEvent(new Event("change", { bubbles: true })); };
   const ciz = () => {
     const aranan = aramaAnahtari(kutu.value);
     const kelimeler = aranan.split(" ").filter(Boolean);
