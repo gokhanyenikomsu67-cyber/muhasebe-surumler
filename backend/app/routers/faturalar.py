@@ -759,10 +759,9 @@ def cari_bul_ya_ac(db: Session, k: Kullanici, karsi: dict, tur: str) -> tuple[Ca
             return cari, False
     if unvan:
         # Aynı ad ("Ltd." / "Ltd. Şti." gibi ek farkı yok sayılır); VKN'leri farklı iki firma ayrı kalır
-        aranan = kural.unvan_cekirdegi(unvan) or kural.ad_anahtari(unvan)
         kendi_vkn = re.sub(r"\D", "", sirket.vkn or "")
         cari = next((c for c in db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.id))
-                     if (kural.unvan_cekirdegi(c.unvan) or kural.ad_anahtari(c.unvan)) == aranan
+                     if kural.cari_adi_mi(c, unvan)
                      and not (vkn and c.vkn and re.sub(r"\D", "", c.vkn) != vkn)
                      and not (kendi_vkn and re.sub(r"\D", "", c.vkn or "") == kendi_vkn)), None)
         if cari:

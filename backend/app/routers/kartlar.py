@@ -121,7 +121,7 @@ def kart_ekstresi_isle(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: di
     kendi = kural.kendi_kelimeleri(sirket_unvan)
     cariler = [c for c in db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id))
                if not (kendi and kural.kendi_kelimeleri(c.unvan) == kendi)]
-    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban} for c in cariler]
+    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban, "eski_adlar": c.eski_adlar} for c in cariler]
     ogrenilen = {e.anahtar: e.cari_id for e in db.scalars(select(IsyeriEslesme).where(IsyeriEslesme.sirket_id == k.sirket_id))}
     cari_idleri = {c["id"] for c in cari_listesi}
     yeni_cari = 0

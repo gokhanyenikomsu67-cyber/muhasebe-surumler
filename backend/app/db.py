@@ -142,6 +142,7 @@ EKLENEN_SUTUNLAR = [
     ("depolar", "eski_adlar", "TEXT"),
     ("kullanicilar", "yetkiler", "JSON"),
     ("wolvox_aktarimlari", "islenen_kalemler", "JSON"),
+    ("cariler", "eski_adlar", "TEXT"),
 ]
 
 
@@ -168,6 +169,7 @@ SEMA_ADIMLARI = [
     (4, "Şantiye ve depolara eski adlar sütunu eklenir", _sutunlari_ekle),
     (5, "Kullanıcılara bölüm yetkileri sütunu eklenir", _sutunlari_ekle),
     (6, "Wolvox aktarımına şantiyesi işlenen faturalar sütunu eklenir", _sutunlari_ekle),
+    (7, "Carilere eski adlar (birleştirilen cariler) sütunu eklenir", _sutunlari_ekle),
 ]
 SEMA_YEDEK_KLASORU = VERI_KLASORU / "guncelleme-yedekleri"
 

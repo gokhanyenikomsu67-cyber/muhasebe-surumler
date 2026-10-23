@@ -52,6 +52,18 @@ def kayit_adlari(kayit) -> list[str]:
     return [kayit.ad, *[x.strip() for x in (getattr(kayit, "eski_adlar", None) or "").splitlines() if x.strip()]]
 
 
+def cari_adlari(cari) -> list[str]:
+    """Carinin ünvanı ve birleştirmeyle gelen eski adları (Cari nesnesi ya da {"unvan", "eski_adlar"} sözlüğü)."""
+    al = cari.get if isinstance(cari, dict) else lambda a: getattr(cari, a, None)
+    return [x for x in [al("unvan"), *[y.strip() for y in (al("eski_adlar") or "").splitlines()]] if x]
+
+
+def cari_adi_mi(cari, ad: str | None) -> bool:
+    """Aynı firma adı mı? Ekler ("Ltd. Şti.", "A.Ş."), Türkçe karakter, nokta/boşluk farkı yok sayılır; eski adlar da sayılır."""
+    anahtar = unvan_cekirdegi(ad) or ad_anahtari(ad)
+    return bool(anahtar) and any((unvan_cekirdegi(x) or ad_anahtari(x)) == anahtar for x in cari_adlari(cari))
+
+
 def adi_bu_mu(kayit, ad: str | None) -> bool:
     anahtar = ad_anahtari(ad)
     return bool(anahtar) and any(ad_anahtari(x) == anahtar for x in kayit_adlari(kayit))
@@ -2395,17 +2407,18 @@ def cari_eslestir(aciklama: str, cariler: list[dict]) -> int | None:
 
     def gecer(k: str) -> bool:  # kısaltmalara izin ver: "muh" ~ "muhendislik"
         return any(t == k or (min(len(t), len(k)) >= 3 and (t.startswith(k) or k.startswith(t))) for t in metin_kelimeleri)
-    adaylar = []
+    en_iyi: dict[int, int] = {}
     for c in cariler:
-        kelimeler = [k for k in re.sub(r"[^a-z0-9 ]", " ", sade(c["unvan"])).split() if len(k) >= 3 and k not in GENEL_KELIMELER]
-        if not kelimeler:
-            continue
-        aranan = kelimeler[:2]
-        if f" {aranan[0]} " in f" {' '.join(metin_kelimeleri)} " and all(gecer(k) for k in aranan[1:]):
-            adaylar.append((len(aranan), c["id"]))
-    if not adaylar:
+        for ad in cari_adlari(c):  # birleştirilmiş carinin eski adları da aranır
+            kelimeler = [k for k in re.sub(r"[^a-z0-9 ]", " ", sade(ad)).split() if len(k) >= 3 and k not in GENEL_KELIMELER]
+            if not kelimeler:
+                continue
+            aranan = kelimeler[:2]
+            if f" {aranan[0]} " in f" {' '.join(metin_kelimeleri)} " and all(gecer(k) for k in aranan[1:]):
+                en_iyi[c["id"]] = max(en_iyi.get(c["id"], 0), len(aranan))
+    if not en_iyi:
         return None
-    adaylar.sort(reverse=True)
+    adaylar = sorted(((n, i) for i, n in en_iyi.items()), reverse=True)
     if len(adaylar) > 1 and adaylar[0][0] == adaylar[1][0]:
         return None  # birden fazla cari eşit derecede uyuyor; kullanıcı seçsin
     return adaylar[0][1]

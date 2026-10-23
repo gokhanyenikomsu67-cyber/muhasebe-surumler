@@ -634,7 +634,7 @@ def ekstre_yukle(hesap_id: int, dosya: UploadFile = File(...), yontem: str = "ot
 def _banka_ekstresi_oku(db: Session, k: Kullanici, icerik: bytes, mime: str, yontem: str) -> dict:
     """Banka hesap ekstresini okur (Excel/CSV/PDF kurallarla, okunamazsa ve anahtar varsa yapay zekayla)."""
     cariler = db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)).all()
-    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban} for c in cariler]
+    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban, "eski_adlar": c.eski_adlar} for c in cariler]
     tablo = mime in ai.EKSTRE_TABLO_TURLERI or mime == "application/pdf"
     try:
         if tablo and yontem != "ai":
@@ -794,7 +794,7 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
     for c in cariler:
         if c.iban and re.sub(r"\s", "", c.iban).upper() in kendi_ibanlar:
             c.iban = None
-    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban} for c in cariler]
+    cari_listesi = [{"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "iban": c.iban, "eski_adlar": c.eski_adlar} for c in cariler]
     notlar = [okunan.get("notlar") or ""]
     hesaplar = list(db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id)))
     yeni_hesap: list[str] = []
@@ -847,9 +847,7 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
     def karsi_cari(oneri: dict, yon: str) -> int | None:
         """Açıklamadaki karşı taraf caride varsa onu, yoksa yeni açtığı cariyi döndürür. Aynı adlı cari (ek, Türkçe
         harf ve nokta farkı yok sayılır) ikinci kez açılmaz."""
-        anahtar = kural.unvan_cekirdegi(oneri["unvan"]) or kural.ad_anahtari(oneri["unvan"])
-        ayni = next((c["id"] for c in cari_listesi
-                     if anahtar and (kural.unvan_cekirdegi(c["unvan"]) or kural.ad_anahtari(c["unvan"])) == anahtar), None)
+        ayni = next((c["id"] for c in cari_listesi if kural.cari_adi_mi(c, oneri["unvan"])), None)
         iban = oneri.get("iban") if oneri.get("iban") and oneri["iban"].upper() not in kendi_ibanlar else None
         bulunan = ayni or kural.cari_eslestir(f"{oneri['unvan']} {iban or ''}", cari_listesi)
         if not bulunan:

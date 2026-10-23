@@ -222,7 +222,7 @@ class _Cariler:
             if vkn and c.vkn == vkn:
                 return c
         for c in self.liste:  # aynı ad ("Ltd." / "Ltd. Şti." farkı yok sayılır); VKN'leri farklı iki firma ayrı kalır
-            if anahtar and (kural.unvan_cekirdegi(c.unvan) or kural.ad_anahtari(c.unvan)) == anahtar and not (vkn and c.vkn and c.vkn != vkn):
+            if anahtar and kural.cari_adi_mi(c, unvan) and not (vkn and c.vkn and c.vkn != vkn):
                 return c
         if not unvan:
             return None

@@ -69,6 +69,8 @@ class Cari(Base):
     ad_otomatik: Mapped[bool] = mapped_column(Boolean, default=False)
     # Varsayılan vade (gün): faturada vade yazmıyorsa fatura tarihi + bu gün vade sayılır.
     vade_gun: Mapped[int | None] = mapped_column()
+    # Birleştirilen carilerin adları (satır satır): bu adlarla gelen fatura/ekstre/çek bu cariye işlenir.
+    eski_adlar: Mapped[str | None] = mapped_column(Text)
 
 
 class Santiye(Base):

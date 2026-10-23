@@ -360,13 +360,30 @@ function cariListesiAc() {
       { alan: "tur", baslik: "Tür", deger: (s) => Object.fromEntries(CARI_TURLERI)[s.tur] },
       { alan: "vkn", baslik: "VKN/TCKN" }, { alan: "vergi_dairesi", baslik: "Vergi Dairesi" },
       { alan: "telefon", baslik: "Telefon" }, { alan: "eposta", baslik: "E-posta" }, { alan: "iban", baslik: "IBAN" },
+      { alan: "eski_adlar", baslik: "Eski adları", deger: (c) => (c.eski_adlar || "").split("\n").join(", ") },
     ],
     yeni: () => cariFormAc(),
     ac: (c) => cariFormAc(c),
     sil: (c) => api(`/api/cariler/${c.id}`, { metod: "DELETE" }),
-    toplu: [{ ad: "Seçilenleri sil", tehlikeli: true, islem: (sec) => topluSil(sec, "cari", (c) => c.unvan, (c) => `/api/cariler/${c.id}`) }],
+    toplu: [
+      { ad: "Seçilenleri birleştir", islem: carileriBirlestir },
+      { ad: "Seçilenleri sil", tehlikeli: true, islem: (sec) => topluSil(sec, "cari", (c) => c.unvan, (c) => `/api/cariler/${c.id}`) }],
     excel: "/api/excel/cariler",
   }));
+}
+
+// Aynı firmaya açılmış cariler tek caride toplanır: faturaları, hareketleri, çekleri (bakiye) ona geçer; öteki adlar
+// eski ad olur, sonra o adlarla gelen fatura/ekstre de bu cariye işlenir. VKN'li kayıt önce önerilir.
+async function carileriBirlestir(sec) {
+  if (sec.length < 2) { bildir("Birleştirmek için en az iki cari seçin.", true); return false; }
+  const sirali = [...sec].sort((a, b) => (b.vkn ? 1 : 0) - (a.vkn ? 1 : 0));
+  const hedef = await secimSor("Carileri birleştir",
+    "Seçilen carilerin bütün faturaları, banka/kasa hareketleri ve çekleri tek cariye geçer, bakiyeleri birleşir. "
+    + "Öteki adlar saklanır; o adlarla gelen yeni kayıtlar da bu cariye işlenir. Hangi cari kalsın?",
+    [...sirali.map((c, i) => [c.id, c.vkn ? `${c.unvan} (VKN ${c.vkn})` : c.unvan, i === 0]), [null, "Vazgeç"]]);
+  if (hedef == null) return false;
+  await api(`/api/cariler/${hedef}/birlestir`, { metod: "POST", veri: { idler: sec.map((c) => c.id) } });
+  bildir(`${sec.length} cari birleştirildi.`);
 }
 
 function cariFormAc(cari = null) {

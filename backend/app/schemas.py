@@ -52,6 +52,7 @@ class CariGiris(BaseModel):
 
 class CariCikis(CariGiris, Orm):
     id: int
+    eski_adlar: str | None = None
 
 
 class SantiyeGiris(BaseModel):

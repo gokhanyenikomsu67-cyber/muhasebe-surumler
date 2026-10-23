@@ -123,9 +123,8 @@ def kendi_vkn_reddet(db: Session, k: Kullanici, vkn: str | None) -> None:
 
 def ayni_adli_cari(db: Session, sirket_id: int, unvan: str | None, vkn: str | None = None, haric: int | None = None) -> Cari | None:
     """Aynı ad: ekler ("Ltd. Şti.", "A.Ş."), Türkçe karakter, nokta ve boşluk farkı yok sayılır."""
-    anahtar = kural.unvan_cekirdegi(unvan) or kural.ad_anahtari(unvan)
     return next((c for c in db.scalars(select(Cari).where(Cari.sirket_id == sirket_id).order_by(Cari.id))
-                 if c.id != haric and anahtar and (kural.unvan_cekirdegi(c.unvan) or kural.ad_anahtari(c.unvan)) == anahtar
+                 if c.id != haric and kural.cari_adi_mi(c, unvan)
                  and not (vkn and c.vkn and c.vkn != vkn)), None)
 
 
@@ -207,6 +206,44 @@ def cari_sil(cari_id: int, db: Session = Depends(get_db), k: Kullanici = Depends
     db.delete(c)
     db.commit()
     return {"ok": True}
+
+
+class CariBirlestir(schemas.BaseModel):
+    idler: list[int]
+
+
+@router.post("/cariler/{hedef_id}/birlestir", response_model=schemas.CariCikis)
+def cari_birlestir(hedef_id: int, istek: CariBirlestir, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
+    """Seçilen cariler hedef caride toplanır: faturaları, çekleri (ciro dahil), banka/kasa hareketleri, depoları,
+    taşeron giderleri, kart işyeri eşleşmeleri ve düzenli ödemeleri hedefe geçer (bakiye birleşir). Hedefin boş
+    bilgileri (VKN, IBAN...) doldurulur; adları hedefin eski adı olur, sonra bu adla gelen kayıt hedefe işlenir."""
+    from sqlalchemy import update
+
+    from ..models import Cek, Depo, DuzenliOdeme, Hareket, IsyeriEslesme, TaseronGider
+    hedef = sirket_kaydi(db, Cari, hedef_id, k)
+    kaynaklar = [sirket_kaydi(db, Cari, cid, k) for cid in dict.fromkeys(istek.idler) if cid != hedef.id]
+    sade = lambda v: "".join(ch for ch in v or "" if ch.isdigit())  # noqa: E731
+    vknler = {sade(c.vkn) for c in [hedef, *kaynaklar] if sade(c.vkn)}
+    if len(vknler) > 1:
+        raise HTTPException(409, "Seçilen carilerin VKN'leri farklı, ayrı firmalar; birleştirilemez.")
+    for c in kaynaklar:
+        for model, alan in ((Fatura, "cari_id"), (Cek, "cari_id"), (Cek, "ciro_cari_id"), (Hareket, "cari_id"), (Depo, "cari_id"),
+                            (TaseronGider, "cari_id"), (IsyeriEslesme, "cari_id"), (DuzenliOdeme, "cari_id")):
+            db.execute(update(model).where(getattr(model, alan) == c.id).values({alan: hedef.id}))
+        for alan in ("vkn", "vergi_dairesi", "adres", "telefon", "eposta", "iban", "vade_gun"):
+            if not getattr(hedef, alan) and getattr(c, alan):
+                setattr(hedef, alan, getattr(c, alan))
+        if hedef.tur != c.tur:
+            hedef.tur = "her_ikisi"
+        adlar = kural.cari_adlari(hedef)
+        for x in kural.cari_adlari(c):
+            if all(kural.ad_anahtari(x) != kural.ad_anahtari(y) for y in adlar):
+                adlar.append(x)
+        hedef.eski_adlar = "\n".join(adlar[1:]) or None
+        db.flush()
+        db.delete(c)
+    db.commit()
+    return hedef
 
 
 # --- Şantiyeler ----------------------------------------------------------
