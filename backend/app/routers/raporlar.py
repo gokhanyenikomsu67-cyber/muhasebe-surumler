@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from .. import kural
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
-from ..hesap import banka_bakiyeleri, cari_bakiyeleri, cari_hareketleri, isaret, kasa_bakiyesi, satis_tarafi, tl_kur
+from ..hesap import (RAPOR_DURUMLARI, banka_bakiyeleri, cari_bakiyeleri, cari_hareketleri, firma_adi, isaret, kasa_bakiyesi,
+                     satis_tarafi, tl_kur)
 from ..models import ACIK_CEK_DURUMLARI, CEK_DURUMLARI, HAREKET_TURLERI, BankaHesabi, Cari, Cek, Fatura, Hareket, Kullanici, Santiye, Sirket
 from ..yukleme import dosyayi_oku
 from .temel import sirket_kaydi
@@ -55,7 +56,8 @@ def santiye_paylari(f: Fatura) -> dict[int | None, dict]:
 
 
 def santiye_ozet_veri(db: Session, k: Kullanici) -> list[dict]:
-    faturalar = [(f, santiye_paylari(f)) for f in _onayli(db, k)]
+    faturalar = [(f, santiye_paylari(f)) for f in db.scalars(select(Fatura).where(
+        Fatura.sirket_id == k.sirket_id, Fatura.durum.in_(RAPOR_DURUMLARI)))]
     masraflar = db.scalars(select(Hareket).where(
         Hareket.sirket_id == k.sirket_id, Hareket.durum == "onayli", Hareket.santiye_id.is_not(None),
         Hareket.tur.in_(["masraf", "banka_masrafi"]))).all()
@@ -88,11 +90,12 @@ def santiye_ozet_veri(db: Session, k: Kullanici) -> list[dict]:
 
 def santiye_fatura_veri(db: Session, k: Kullanici, yon: str | None, baslangic: date | None, bitis: date | None,
                         santiye_ids: str | None, durum: str | None = "onayli") -> list[dict]:
-    """Şantiye bazlı fatura listesi: her satır bir faturanın bir şantiyeye düşen payıdır (kalem bazında)."""
+    """Şantiye bazlı fatura listesi: her satır bir faturanın bir şantiyeye düşen payıdır (kalem bazında).
+    durum="onayli": onaylılarla birlikte Wolvox'tan aktarılan geçmiş faturalar."""
     secili = {int(x) for x in (santiye_ids or "").split(",") if x.strip().isdigit()}
     q = select(Fatura).where(Fatura.sirket_id == k.sirket_id)
     if durum:
-        q = q.where(Fatura.durum == durum)
+        q = q.where(Fatura.durum.in_(RAPOR_DURUMLARI) if durum == "onayli" else Fatura.durum == durum)
     if yon:
         q = q.where(Fatura.yon == yon)
     if baslangic:
@@ -109,7 +112,7 @@ def santiye_fatura_veri(db: Session, k: Kullanici, yon: str | None, baslangic: d
             tur = ("Satış iadesi" if f.yon == "gelen" else "Alış iadesi") if i < 0 else "Alış" if f.yon == "gelen" else "Satış"
             satirlar.append({"santiye_id": sid, "santiye": adlar.get(sid, "Şantiyesiz"), "fatura_id": f.id, "tarih": f.tarih,
                              "fatura_no": f.fatura_no, "tur": tur,
-                             "cari": f.cari.unvan if f.cari else None, "gider_turu": f.gider_turu,
+                             "cari": firma_adi(f), "gider_turu": f.gider_turu, "aktarim": f.durum == "aktarim",
                              "kalemler": ", ".join(p["kalemler"]),
                              "kalem_detay": [{**d, "tutar": i * d["tutar"], "kdv": i * d["kdv"], "toplam": i * d["toplam"]}
                                              for d in p.get("detay", [])],
@@ -273,7 +276,8 @@ async def excel_cari_yukle(dosya: UploadFile = File(...), db: Session = Depends(
 
 @router.get("/excel/faturalar")
 def excel_faturalar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    faturalar = db.scalars(select(Fatura).where(Fatura.sirket_id == k.sirket_id).order_by(Fatura.tarih)).all()
+    faturalar = db.scalars(select(Fatura).where(Fatura.sirket_id == k.sirket_id, Fatura.durum != "aktarim")
+                           .order_by(Fatura.tarih)).all()
     basliklar = ["Tarih", "Fatura No", "Tür", "Durum", "Cari", "VKN", "Şantiye", "Gider Türü",
                  "Ara Toplam", "KDV", "Tevkifat", "Stopaj", "Diğer Vergiler", "Genel Toplam", "Para Birimi", "Fatura Tipi", "Kur",
                  "Genel Toplam (TL)"]

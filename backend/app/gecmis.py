@@ -12,6 +12,7 @@ from .models import BankaHesabi, Cari, Cek, Degisiklik, Fatura, FaturaKalem, Har
 
 IZLENEN = {Fatura: "fatura", Hareket: "hareket", Cek: "cek", Cari: "cari", BankaHesabi: "banka_hesabi"}
 TASLAKLI = (Fatura, Hareket)  # taslakken yapılan düzenlemeler geçmişe yazılmaz, onaydan sonrakiler yazılır
+KAYITSIZ = ("taslak", "aktarim")  # bu durumdaki kaydın eklenmesi/silinmesi geçmişe yazılmaz (Wolvox aktarımı toplu gelir/gider)
 ATLANAN = {"id", "sirket_id", "ai_okuma", "olusturma", "ekstre_anahtari", "kaynak_dosya", "xml_dosya", "bagli_hareket_id",
            "acilis_ekstreden", "ekstre_tarihi", "ekstre_bakiye"}
 KALEM_ALANLARI = ("aciklama", "miktar", "birim_fiyat", "kdv_orani", "tutar", "kdv_tutari", "tevkifat_orani", "stopaj_orani", "iskonto_tutari",
@@ -127,10 +128,10 @@ def _kayitlar(session: Session) -> list[tuple]:
         if type(obj) not in IZLENEN:
             continue
         durum = (obj.durum or type(obj).__table__.c.durum.default.arg) if isinstance(obj, TASLAKLI) else None
-        if durum != "taslak":
+        if durum not in KAYITSIZ:
             sonuc.append((obj, IZLENEN[type(obj)], "eklendi", None))
     for obj in session.deleted:
-        if type(obj) in IZLENEN and not (isinstance(obj, TASLAKLI) and _eski_durum(obj) == "taslak"):
+        if type(obj) in IZLENEN and not (isinstance(obj, TASLAKLI) and _eski_durum(obj) in KAYITSIZ):
             sonuc.append((obj, IZLENEN[type(obj)], "silindi", _son_hal(obj)))
     for obj in set(session.dirty) | set(kalem_degisen):
         if type(obj) not in IZLENEN or obj in session.deleted or obj in session.new:

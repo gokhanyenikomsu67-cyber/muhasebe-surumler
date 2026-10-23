@@ -50,11 +50,26 @@ def kalem_toplami(f: Fatura, kl: FaturaKalem) -> float:
     return float(kl.tutar) + kl.kdv + ek * oran
 
 
-def depo_kalemleri(db: Session, sirket_id: int, cari_id: int | None = None, depo_id: int | None = None) -> list[dict]:
+# Şantiye, depo ve malzeme raporlarına giren faturalar: onaylılar ve Wolvox'tan aktarılan geçmiş faturalar.
+# Aktarılan faturalar cari bakiyesine, KDV ve mali raporlara girmez (yalnız onaylılar).
+RAPOR_DURUMLARI = ("onayli", "aktarim")
+
+
+def firma_adi(f: Fatura) -> str | None:
+    """Faturanın karşı firması: cari, yoksa (Wolvox aktarımı) faturada yazan ad."""
+    if f.cari:
+        return f.cari.unvan
+    o = f.ai_okuma or {}
+    return ((o.get("satici") if f.yon == "gelen" else o.get("alici")) or {}).get("unvan")
+
+
+def depo_kalemleri(db: Session, sirket_id: int, cari_id: int | None = None, depo_id: int | None = None,
+                   aktarim: bool = False) -> list[dict]:
     """Onaylı alış faturalarında depoya ayrılmış kalemler (TL karşılığıyla). İade faturasında tutar eksidir.
-    Depoya cari bağlıysa bu tutarlar o cariye borç yazılır; faturanın kendi carisi değişmez."""
+    Depoya cari bağlıysa bu tutarlar o cariye borç yazılır; faturanın kendi carisi değişmez.
+    aktarim=True: Wolvox'tan aktarılan geçmiş faturalar da gelir (yalnız rapor; cariye borç yazılmaz)."""
     q = select(FaturaKalem, Fatura, Depo).join(Fatura, FaturaKalem.fatura_id == Fatura.id).join(Depo, FaturaKalem.depo_id == Depo.id) \
-        .where(Fatura.sirket_id == sirket_id, Fatura.durum == "onayli")
+        .where(Fatura.sirket_id == sirket_id, Fatura.durum.in_(RAPOR_DURUMLARI) if aktarim else Fatura.durum == "onayli")
     if cari_id is not None:
         q = q.where(Depo.cari_id == cari_id)
     if depo_id is not None:
@@ -66,7 +81,7 @@ def depo_kalemleri(db: Session, sirket_id: int, cari_id: int | None = None, depo
         kur, i = tl_kur(f), isaret(f)
         satirlar.append({"depo_id": d.id, "depo": d.ad, "cari_id": d.cari_id, "santiye_id": kl.santiye_id or f.santiye_id,
                          "fatura_id": f.id, "tarih": f.tarih, "fatura_no": f.fatura_no,
-                         "satici": f.cari.unvan if f.cari else None, "kalem": kl.aciklama,
+                         "satici": firma_adi(f), "kalem": kl.aciklama, "aktarim": f.durum == "aktarim",
                          "miktar": float(kl.miktar or 0), "birim": kl.birim,
                          "tutar": round(i * float(kl.tutar) * kur, 2), "kdv": round(i * kl.kdv * kur, 2),
                          "toplam": round(i * kalem_toplami(f, kl) * kur, 2), "kalem_id": kl.id})

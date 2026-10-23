@@ -150,7 +150,8 @@ def test_butun_yuklemelerde_ayni_boyut_siniri():
     buyuk = b"0" * (yukleme.EN_BUYUK_DOSYA + 1)
     uclar_ = ["/api/excel/faturalar/yukle", "/api/excel/cekler/onizle", "/api/excel/cekler/yukle",
               f"/api/banka-hesaplari/{hesap}/ekstre", "/api/cekler/oku", "/api/faturalar/oku",
-              "/api/kredi-karti-ekstresi", "/api/excel/cariler/yukle", "/api/taseron-giderleri/bordro-onizle", "/api/ekstre-yukle"]
+              "/api/kredi-karti-ekstresi", "/api/excel/cariler/yukle", "/api/taseron-giderleri/bordro-onizle", "/api/ekstre-yukle",
+              "/api/wolvox/onizle", "/api/wolvox/aktar"]
     def gez(routes):
         for r in routes:
             if getattr(r, "original_router", None) is not None:

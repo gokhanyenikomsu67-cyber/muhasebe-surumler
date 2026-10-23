@@ -185,6 +185,22 @@ class RedFatura(Base):
     olusturma: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class WolvoxAktarim(Base):
+    """Wolvox'tan bir kerelik aktarım: aktarılan faturalar durum="aktarim" olur (cari bakiyesi, KDV ve mali raporlara
+    girmez; şantiye, depo ve malzeme raporlarında görünür). Aktarım geri alınınca faturaları ve açtığı boş
+    şantiye/depolar silinir."""
+    __tablename__ = "wolvox_aktarimlari"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sirket_id: Mapped[int] = mapped_column(ForeignKey("sirketler.id"), index=True)
+    tarih: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    dosya: Mapped[str | None] = mapped_column(String(255))
+    fatura_sayisi: Mapped[int] = mapped_column(Integer, default=0)
+    atlanan: Mapped[int] = mapped_column(Integer, default=0)
+    toplam: Mapped[float] = mapped_column(Para, default=0)
+    acilan_santiyeler: Mapped[list | None] = mapped_column(JSON)
+    acilan_depolar: Mapped[list | None] = mapped_column(JSON)
+
+
 class Malzeme(Base):
     """Malzeme (stok adı) kartı: faturalarda biraz farklı yazılan aynı malzemenin adları bir kartta toplanır
     (eski_adlar = kalemlerde geçen öteki yazılışlar, satır satır). Kalem kendi adını korur; karta adıyla bağlanır."""

@@ -112,6 +112,8 @@ def listele(
     for alan, deger in [(Fatura.yon, yon), (Fatura.durum, durum), (Fatura.cari_id, cari_id)]:
         if deger is not None:
             q = q.where(alan == deger)
+    if durum is None:  # Wolvox'tan aktarılan geçmiş faturalar yalnız kendi süzgeciyle listelenir
+        q = q.where(Fatura.durum != "aktarim")
     if santiye_id is not None:  # faturanın ya da herhangi bir kaleminin şantiyesi
         q = q.where(or_(Fatura.santiye_id == santiye_id, Fatura.kalemler.any(FaturaKalem.santiye_id == santiye_id)))
     if baslangic:
@@ -250,6 +252,8 @@ def guncelle(fatura_id: int, veri: schemas.FaturaGiris, db: Session = Depends(ge
     f = sirket_kaydi(db, Fatura, fatura_id, k)
     if f.durum == "iptal":
         raise HTTPException(400, "İptal edilmiş fatura değiştirilemez; önce iptali geri alın.")
+    if f.durum == "aktarim" and veri.cari_id:
+        raise HTTPException(400, "Wolvox'tan aktarılan geçmiş faturaya cari bağlanmaz (cari bakiyelerine karışmasın).")
     _doldur(db, f, veri, k)
     db.commit()
     return cikis(f)
@@ -285,6 +289,8 @@ def sil(fatura_id: int, db: Session = Depends(get_db), k: Kullanici = Depends(ya
 @router.post("/{fatura_id}/onayla", response_model=schemas.FaturaCikis)
 def onayla(fatura_id: int, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
     f = sirket_kaydi(db, Fatura, fatura_id, k)
+    if f.durum == "aktarim":
+        raise HTTPException(400, "Wolvox'tan aktarılan geçmiş fatura onaylanmaz; yalnız şantiye, depo ve malzeme raporlarında görünür.")
     if not f.cari_id:
         satici = (f.ai_okuma or {}).get("satici" if f.yon == "gelen" else "alici") or {}
         c, _ = cari_bul_ya_ac(db, k, satici, "tedarikci" if f.yon == "gelen" else "musteri")
@@ -778,9 +784,28 @@ def cari_bul_ya_ac(db: Session, k: Kullanici, karsi: dict, tur: str) -> tuple[Ca
     return None, False
 
 
+def wolvox_faturasi(db: Session, sirket_id: int, okunan: dict, yon: str) -> Fatura | None:
+    """Okunan fatura Wolvox'tan aktarılmış mı: aynı fatura no ve aynı tarih ya da aynı toplam (1 TL'ye kadar)."""
+    no = (okunan.get("fatura_no") or "").strip()
+    if not no:
+        return None
+    adaylar = db.scalars(select(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.yon == yon, Fatura.durum == "aktarim",
+                                              Fatura.fatura_no == no)).all()
+    tarih, toplam = _tarih(okunan.get("tarih")), float(okunan.get("genel_toplam") or 0)
+
+    def puan(f: Fatura) -> int:
+        return 2 * (tarih is not None and f.tarih == tarih) + (bool(toplam) and abs(float(f.genel_toplam) - toplam) < 1)
+    adaylar = sorted((f for f in adaylar if puan(f)), key=puan, reverse=True)
+    return adaylar[0] if adaylar else None
+
+
 def taslak_olustur(db: Session, k: Kullanici, okunan: dict, yon: str, santiyeler, dosya_adi: str | None = None) -> Fatura:
     karsi = okunan.get("satici") if yon == "gelen" else okunan.get("alici")
     karsi = karsi or {}
+    if eski := wolvox_faturasi(db, k.sirket_id, okunan, yon):
+        # Wolvox'tan aktarılmış geçmiş fatura: ikinci kez kaydedilmez, cari de açılmaz; ekranda "zaten var" yazar
+        eski._zaten_var = True
+        return eski
     # Cari VKN ya da ünvanla bulunur; yoksa faturadaki bilgilerle hemen açılır.
     cari, yeni_cari = cari_bul_ya_ac(db, k, karsi, "tedarikci" if yon == "gelen" else "musteri")
     if cari and okunan.get("fatura_no") and not yeni_cari:

@@ -271,3 +271,4 @@ body.baglanti-yok .dugme, body.baglanti-yok #arac-cubugu button, body.baglanti-y
 table.yetki-tablo { border-collapse: collapse; margin: 8px 0; }
 table.yetki-tablo th, table.yetki-tablo td { border: 1px solid var(--cizgi, #c9d3dd); padding: 4px 10px; text-align: center; }
 table.yetki-tablo td:first-child, table.yetki-tablo th:first-child { text-align: left; }
+.etiket.aktarim { background: #e8eaf6; color: #303f9f; border: 1px solid #9fa8da; }

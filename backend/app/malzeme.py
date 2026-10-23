@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from . import kural
-from .hesap import tl_kur
+from .hesap import RAPOR_DURUMLARI, firma_adi, tl_kur
 from .models import Fatura, FaturaKalem, Malzeme
 
 BENZERLIK = 0.85
@@ -139,7 +139,8 @@ class Dizin:
 
 
 def onayli_kalemler(db: Session, sirket_id: int):
-    return db.scalars(select(FaturaKalem).join(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.durum == "onayli")
+    """Onaylı ve Wolvox'tan aktarılan faturaların kalemleri."""
+    return db.scalars(select(FaturaKalem).join(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.durum.in_(RAPOR_DURUMLARI))
                       .options(joinedload(FaturaKalem.fatura).joinedload(Fatura.cari)))
 
 
@@ -148,9 +149,18 @@ def _kalem_ozeti(k: FaturaKalem) -> dict:
     kur = tl_kur(f)
     miktar = float(k.miktar or 0)
     return {"fatura_id": f.id, "fatura_no": f.fatura_no, "tarih": f.tarih, "yon": f.yon,
-            "cari": f.cari.unvan if f.cari else None, "miktar": miktar, "birim": k.birim,
+            "cari": firma_adi(f), "miktar": miktar, "birim": k.birim,
             "birim_fiyat": round(float(k.tutar or 0) * kur / miktar, 4) if miktar else None,
             "tutar": round(float(k.tutar or 0) * kur, 2)}
+
+
+# Benzer kart önerileri pahalıdır (binlerce ad): kartlar değişmedikçe önceki sonuç kullanılır.
+# {sirket_id: (kartların imzası, {ad anahtarı: [(benzerlik, güçlü, farklar, kart id)]})}
+_ONERI_BELLEGI: dict[int, tuple[int, dict]] = {}
+
+
+def _imza(kartlar: list[Malzeme]) -> int:
+    return hash(tuple((m.id, m.ad, m.eski_adlar) for m in kartlar))
 
 
 def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
@@ -165,13 +175,21 @@ def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
         if a and a not in dizin.tam:
             gruplar.setdefault(a, []).append(kalem)
     sorulacak = []
+    imza = _imza(dizin.kartlar)
+    bellek = _ONERI_BELLEGI[sirket_id][1] if _ONERI_BELLEGI.get(sirket_id, (None,))[0] == imza else {}
+    yeni_bellek, kart_acildi = {}, False
+    kimlik = {m.id: m for m in dizin.kartlar}
     # En çok geçen yazılış önce: kart onun adıyla açılır, azınlık yazılışlar ona benzer diye sorulur
     for a, grup in sorted(gruplar.items(), key=lambda t: (-len(t[1]), t[0])):
         ad = " ".join((grup[0].aciklama or "").split())
         if dizin.bul(ad):
             continue
-        oneriler = dizin.benzerler(ad)
+        if a in bellek:
+            oneriler = [(o, g, f, kimlik[i]) for o, g, f, i in bellek[a]]
+        else:
+            oneriler = dizin.benzerler(ad)
         if oneriler:
+            yeni_bellek[a] = [(o, g, f, m.id) for o, g, f, m in oneriler]
             sorulacak.append((ad, grup, oneriler))
             continue
         m = Malzeme(sirket_id=sirket_id, ad=ad[:255])
@@ -179,7 +197,18 @@ def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
         db.flush()
         dizin.kartlar.append(m)
         dizin.ekle(m)
-    db.commit()
+        kart_acildi = True
+    if kart_acildi:
+        # Yüklü kalem ve kartlar yeniden okunmasın (binlerce kalemde tek tek sorgu olur): yalnız yeni kartlar yazılır
+        eski, db.expire_on_commit = db.expire_on_commit, False
+        try:
+            db.commit()
+        finally:
+            db.expire_on_commit = eski
+    if kart_acildi:  # yeni kart, önceki adlara da öneri olabilir: bir dahaki sefer baştan hesaplanır
+        _ONERI_BELLEGI.pop(sirket_id, None)
+    else:
+        _ONERI_BELLEGI[sirket_id] = (imza, yeni_bellek)
     if not sorulacak:
         return dizin, []
     # Önerilen kartın birimi ve ortalama fiyatı (kullanıcı karşılaştırsın)

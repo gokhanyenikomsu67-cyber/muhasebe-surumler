@@ -420,12 +420,13 @@ def depo_rapor_veri(db: Session, k: Kullanici, santiye_id: int | None, depo_id: 
                     baslangic: date | None, bitis: date | None) -> list[dict]:
     adlar = {s.id: s.ad for s in db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id))}
     satirlar = []
-    for x in depo_kalemleri(db, k.sirket_id, depo_id=depo_id):
+    for x in depo_kalemleri(db, k.sirket_id, depo_id=depo_id, aktarim=True):
         if santiye_id and x["santiye_id"] != santiye_id:
             continue
         if (baslangic and x["tarih"] and x["tarih"] < baslangic) or (bitis and x["tarih"] and x["tarih"] > bitis):
             continue
-        satirlar.append({**x, "santiye": adlar.get(x["santiye_id"], "Şantiyesiz"), "kaynak": "Fatura"})
+        satirlar.append({**x, "santiye": adlar.get(x["santiye_id"], "Şantiyesiz"),
+                         "kaynak": "Wolvox aktarımı" if x["aktarim"] else "Fatura"})
     q = select(TaseronGider).where(TaseronGider.sirket_id == k.sirket_id)
     if depo_id:
         q = q.where(TaseronGider.depo_id == depo_id)

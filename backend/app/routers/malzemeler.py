@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from .. import kural, malzeme
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
-from ..hesap import isaret, satis_tarafi, tl_kur
+from ..hesap import firma_adi, isaret, satis_tarafi, tl_kur
 from ..models import Kullanici, Malzeme
 from .temel import sirket_kaydi
 
@@ -159,7 +159,7 @@ def rapor_veri(db: Session, k: Kullanici, yon: str, cari_id: int | None, santiye
         ayrinti.append({
             "malzeme_id": m.id if m else None, "malzeme": m.ad if m else " ".join((kalem.aciklama or "").split()),
             "eslesme_bekliyor": m is None, "birim": _birim(kalem.birim), "tarih": f.tarih, "fatura_id": f.id,
-            "fatura_no": f.fatura_no, "cari": f.cari.unvan if f.cari else None,
+            "fatura_no": f.fatura_no, "cari": firma_adi(f),
             "santiye": (kalem.santiye or f.santiye).ad if (kalem.santiye or f.santiye) else None,
             "kalem": kalem.aciklama, "miktar": miktar, "birim_fiyat": round(tutar / miktar, 4) if miktar else None,
             "tutar": tutar, "kdv": round(isa * kalem.kdv * kur, 2)})

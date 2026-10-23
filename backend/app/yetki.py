@@ -30,7 +30,7 @@ _ACIK = [
 _SAHIP_UCTA = [(None, r"kullanicilar(/.*)?|sirket|sistem/.*|yedekler/(geri-yukle|sil)")]
 
 BOLUM_KURALLARI = [
-    ("fatura", r"faturalar(/.*)?|reddedilen-faturalar(/.*)?|excel/(faturalar|fatura-).*|yazdir/fatura/.*"),
+    ("fatura", r"faturalar(/.*)?|reddedilen-faturalar(/.*)?|wolvox(/.*)?|excel/(faturalar|fatura-).*|yazdir/fatura/.*"),
     ("malzeme", r"malzemeler(/.*)?|(raporlar|excel)/malzeme"),
     ("cari", r"cariler(/.*)?|excel/(cariler|cari-).*|raporlar/cari-.*|yazdir/(cari-ekstre|mutabakat).*|mutabakat"),
     ("santiye", r"santiyeler(/.*)?|depolar(/.*)?|taseron.*|(raporlar|excel)/(santiye-|depo-|taseron).*"),

@@ -1035,7 +1035,8 @@ function faturaListesiAc(yon) {
     kaynak: () => api(`/api/faturalar?yon=${yon}${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
     ustAlan: (yenile) => h("span", { style: "display:flex;gap:6px" },
       h("select", { onchange: (e) => { durumFiltre = e.target.value; yenile(); } },
-        [["", "Tüm faturalar"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"]].map(([d, m]) => h("option", { value: d, selected: d === durumFiltre }, m))),
+        [["", "Tüm faturalar"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"],
+          ["aktarim", "Wolvox'tan aktarılan geçmiş"]].map(([d, m]) => h("option", { value: d, selected: d === durumFiltre }, m))),
       h("button", { class: "dugme", onclick: async () => {
         try {
           const taslaklar = await api(`/api/faturalar?yon=${yon}&durum=taslak`);
@@ -1051,7 +1052,7 @@ function faturaListesiAc(yon) {
       { alan: "durum", baslik: "Durum", deger: (f) => h("span", { class: `etiket ${f.durum}` }, DURUM_ADI[f.durum] || f.durum), metin: (f) => DURUM_ADI[f.durum] || f.durum },
       { alan: "tarih", baslik: "Tarih", tip: "tarih" }, { alan: "fatura_no", baslik: "Fatura No" },
       { alan: "cari_unvan", baslik: "Cari", metin: (f) => f.cari_unvan || f.ai_okuma?.[yon === "gelen" ? "satici" : "alici"]?.unvan || "" ,
-        deger: (f) => f.cari_unvan || (f.ai_okuma ? `(yeni) ${f.ai_okuma[yon === "gelen" ? "satici" : "alici"]?.unvan || ""}` : "") },
+        deger: (f) => f.cari_unvan || (f.ai_okuma ? `${f.durum === "aktarim" ? "" : "(yeni) "}${f.ai_okuma[yon === "gelen" ? "satici" : "alici"]?.unvan || ""}` : "") },
       { alan: "santiye_ad", baslik: "Şantiye" }, { alan: "gider_turu", baslik: "Gider Türü" },
       { alan: "ara_toplam", baslik: "Ara Toplam", tip: "para" }, { alan: "kdv_toplam", baslik: "KDV", tip: "para" },
       { alan: "genel_toplam", baslik: "Genel Toplam", tip: "para" },
@@ -1263,7 +1264,7 @@ const toplamTutmuyor = (f) => {
     || (o.genel_toplam != null && Math.abs(f.genel_toplam - o.genel_toplam) > 0.05);
 };
 
-const DURUM_ADI = { taslak: "Taslak", onayli: "Onaylı", iptal: "İptal" };
+const DURUM_ADI = { taslak: "Taslak", onayli: "Onaylı", iptal: "İptal", aktarim: "Wolvox" };
 
 /** Kayıtlı fatura/hareket: sil yerine "İptal et" (bakiyeden düşer, kaydı kalır), "İptali geri al" ve "Geçmiş". */
 function kayitDugmeleri(tur, x, ad, yenile) {
@@ -1880,12 +1881,13 @@ function aiOkumaAc() {
         // Dosyaların sonucu: kaç yeni fatura geldi, kaç dosya zaten kayıtlıydı (atlandı)
         const yeni = yuklemeler.reduce((t, y) => t + (y.yeni || 0), 0);
         const zaten = yuklemeler.filter((y) => y.zaten).length;
+        const wolvoxta = yuklemeler.reduce((t, y) => t + (y.wolvox || 0), 0);
         const yarim = yuklemeler.filter((y) => y.yarim).length;
         const gorunen = ayrinti || yuklemeler.length <= 10 ? yuklemeler : yuklemeler.filter((y) => y.bitti !== true || y.durum.startsWith("Hata"));
         liste.replaceChildren(
           yuklemeler.length > 1 ? h("div", { class: "yukleme-ozet" },
             h("b", {}, `${yuklemeler.length} dosya: ${biten} bitti${bekleyen ? `, ${bekleyen} okunuyor` : ""}${hatali.length ? `, ${hatali.length} okunamadı` : ""}`
-              + ` · ${yeni} yeni fatura eklendi${zaten ? `, ${zaten} dosya zaten kayıtlıydı (atlandı)` : ""}${yarim ? `, ${yarim} dosya yarıda kaldı` : ""}`),
+              + ` · ${yeni} yeni fatura eklendi${zaten ? `, ${zaten} dosya zaten kayıtlıydı (atlandı)` : ""}${wolvoxta ? ` (${wolvoxta} fatura Wolvox aktarımında vardı)` : ""}${yarim ? `, ${yarim} dosya yarıda kaldı` : ""}`),
             yuklemeler.length > 10 ? h("button", { class: "dugme", onclick: () => { OKUMA.ayrinti = !OKUMA.ayrinti; cizYuklemeler(); } }, ayrinti ? "Ayrıntıyı gizle" : "Tüm dosyaları göster") : null,
             !bekleyen ? h("button", { class: "dugme", title: "Yalnız bu dosya listesini boşaltır; faturalar etkilenmez", onclick: () => {
               yuklemeler.length = 0; okumaDurumunuSakla(true); cizYuklemeler(); } }, "Dosya listesini temizle") : null) : null,
@@ -1929,7 +1931,10 @@ function aiOkumaAc() {
               const varolan = faturalar.filter((f) => f.zaten_var).length;
               const guncellenen = faturalar.filter((f) => !f.zaten_var && f.ai_okuma?.bilgi?.some((x) => x.includes("XML'iyle güncellendi"))).length;
               const digerYon = faturalar.filter((f) => f.yon !== yon).length;
-              y.durum = varolan === faturalar.length ? "Bu fatura zaten eklenmiş, atlandı"
+              const wolvoxta = faturalar.filter((f) => f.zaten_var && f.durum === "aktarim").length;
+              y.wolvox = wolvoxta;
+              y.durum = wolvoxta === faturalar.length ? "Bu fatura Wolvox aktarımında zaten var, yüklenmedi"
+                : varolan === faturalar.length ? "Bu fatura zaten eklenmiş, atlandı"
                 : `${faturalar.length > 1 ? faturalar.length + " fatura okundu" : "Okundu"}${varolan ? `, ${varolan} zaten vardı` : ""}`
                   + `${guncellenen ? `, ${guncellenen} PDF taslağı XML ile düzeltildi` : ""}${u ? `, ${u} uyarı` : ""}`
                   + `${digerYon ? `, ${digerYon} fatura ${yon === "gelen" ? "satış" : "alış"} faturalarına eklendi` : ""}`;
@@ -4340,9 +4345,118 @@ function verileriSifirla() {
   girdi.focus();
 }
 
+// ---------------------------------------------------------------- Wolvox'tan bir kerelik geçmiş aktarımı
+// Wolvox'un fatura kalemleri raporu (Excel) okunur; "Grubu" sütunu şantiyeye ya da taşeron deposuna eşlenir.
+// Aktarılan faturalar cari bakiyesine, KDV ve mali raporlara girmez; şantiye, depo ve malzeme raporlarında görünür.
+function wolvoxAktarAc() {
+  let dosya = null, onizleme = null;
+  const kararlar = {};
+  sekmeAc("wolvox-aktar", "Wolvox'tan Aktar", {
+    async ciz(el) {
+      let gecmis = [];
+      try { gecmis = await api("/api/wolvox/aktarimlar"); } catch (e) { bildir(e.message, true); }
+      const dosyaSec = h("input", { type: "file", accept: ".xlsx,.xls", onchange: async (e) => {
+        dosya = e.target.files[0];
+        if (!dosya) return;
+        try {
+          durum("Wolvox dosyası okunuyor…");
+          const fd = new FormData(); fd.append("dosya", dosya);
+          onizleme = await api("/api/wolvox/onizle", { metod: "POST", dosya: fd });
+          for (const k of Object.keys(kararlar)) delete kararlar[k];
+          for (const g of onizleme.gruplar) kararlar[g.grup] = { tur: g.oneri.tur, ad: g.oneri.ad, santiye: g.oneri.santiye };
+          durum("Hazır");
+          yenidenCiz();
+        } catch (err) { durum("Hazır"); bildir(err.message, true); }
+      } });
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Wolvox'tan Geçmiş Aktarımı")),
+        ACIKLAMA("Wolvox'taki fatura kalemleri raporunu (Stok Adı, Tarihi, Fatura No, Ticari Unvanı, Grubu, Miktarı, Tutarı sütunları) bir kez yükleyin. "
+          + "Faturalar \"Wolvox\" olarak ayrı tutulur: cari açılmaz, cari bakiyelerine, KDV ve mali raporlara karışmaz; şantiye, depo ve malzeme raporlarında görünür. "
+          + "Sistemde zaten olan fatura atlanır. Aynı faturanın PDF'ini sonra yüklerseniz ikinci kez kaydedilmez, \"Wolvox aktarımında zaten var\" yazar."),
+        h("p", {}, h("b", {}, "Wolvox Excel dosyası: "), dosyaSec));
+      if (gecmis.length) {
+        el.append(h("h3", {}, "Yapılan aktarımlar"), h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Tarih", "Dosya", "Fatura", "Atlanan", "Toplam", "Açılan şantiye / depo", ""].map((b) => h("th", {}, b)))),
+          h("tbody", {}, gecmis.map((a) => h("tr", {},
+            h("td", {}, tarih(String(a.tarih).slice(0, 10))), h("td", {}, a.dosya || ""), h("td", { class: "sayi" }, a.fatura_sayisi), h("td", { class: "sayi" }, a.atlanan),
+            h("td", { class: "sayi" }, para(a.toplam)), h("td", {}, `${a.acilan_santiye} / ${a.acilan_depo}`),
+            h("td", {}, h("button", { class: "dugme tehlike", onclick: async () => {
+              if (!confirm(`Bu aktarımın ${a.fatura_sayisi} faturası silinsin mi? Açtığı ve başka yerde kullanılmayan şantiye/depolar da silinir. Önce yedek alınır.`)) return;
+              try {
+                durum("Yedek alınıyor ve aktarım geri alınıyor…");
+                const r = await api(`/api/wolvox/aktarimlar/${a.id}`, { metod: "DELETE" });
+                bildir(`${r.silinen_fatura} fatura, ${r.silinen_santiye} şantiye ve ${r.silinen_depo} depo silindi.`);
+                durum("Hazır");
+                yenidenCiz();
+              } catch (e) { durum("Hazır"); bildir(e.message, true); }
+            } }, "Geri al"))))))));
+      }
+      if (!onizleme) return;
+      const o = onizleme;
+      const adlar = [...new Set([...o.santiyeler, ...o.gruplar.map((g) => g.grup).filter(Boolean)])];
+      const liste = h("datalist", { id: "wolvox-adlar" }, adlar.map((a) => h("option", { value: a })));
+      const satir = (g) => {
+        const k = kararlar[g.grup];
+        const adK = h("input", { value: k.ad, list: "wolvox-adlar", style: "min-width:300px", disabled: k.tur === "yok",
+          oninput: (e) => { k.ad = e.target.value; } });
+        const santiyeK = h("input", { value: k.santiye, list: "wolvox-adlar", placeholder: "Hangi şantiyede (boş olabilir)", style: "min-width:200px",
+          hidden: k.tur !== "depo", oninput: (e) => { k.santiye = e.target.value; } });
+        const turS = h("select", { onchange: (e) => {
+          k.tur = e.target.value;
+          adK.disabled = k.tur === "yok";
+          if (k.tur !== "yok" && !k.ad) adK.value = k.ad = g.grup;
+          santiyeK.hidden = k.tur !== "depo";
+        } }, [["santiye", "Şantiye"], ["depo", "Taşeron deposu"], ["yok", "Şantiyesiz"]].map(([d, m]) => h("option", { value: d, selected: d === k.tur }, m)));
+        return h("tr", {},
+          h("td", { style: "white-space:normal;min-width:180px" }, g.grup || "(grupsuz)"),
+          h("td", { class: "sayi" }, g.fatura_sayisi), h("td", { class: "sayi" }, para(g.toplam)),
+          h("td", {}, turS), h("td", {}, adK, " ", santiyeK,
+            g.oneri.kayitli ? h("span", { class: "etiket onayli", style: "margin-left:4px" }, "kayıtlı") : null),
+          h("td", { style: "white-space:normal" }, g.benzer ? h("span", {}, "Benzer grup: ", h("b", {}, g.benzer), " ",
+            h("button", { class: "dugme", title: "Bu grubu da aynı şantiyeye aktar", onclick: () => {
+              const b = kararlar[g.benzer];
+              Object.assign(k, { tur: b.tur, ad: b.ad, santiye: b.santiye });
+              yenidenCiz();
+            } }, "Onunla birleştir")) : ""));
+      };
+      el.append(h("h3", {}, `${o.dosya}: ${o.fatura_sayisi} fatura (${tarih(o.ilk_tarih)} – ${tarih(o.son_tarih)})`),
+        h("p", {}, `${o.aktarilacak} fatura aktarılacak`, o.zaten_var ? `, ${o.zaten_var} fatura sistemde zaten var (atlanacak)` : "",
+          `. ${o.kalem_sayisi} kalem, ${o.firma_sayisi} firma, ${o.stok_adi_sayisi} farklı stok adı`, o.iade_sayisi ? `, ${o.iade_sayisi} iade faturası` : "", "."),
+        o.atlanan_satir_sayisi ? h("p", { class: "negatif" }, `${o.atlanan_satir_sayisi} satır okunamadı: `,
+          o.atlanan_satir.slice(0, 5).map((x) => `${x.satir}. satır (${x.neden})`).join(", ")) : "",
+        ACIKLAMA("Her Wolvox grubunun nereye gideceğini seçin. Kayıtlı şantiye adını yazarsanız ona işlenir, yoksa bu adla yeni şantiye açılır. "
+          + "Aynı adı yazdığınız gruplar tek şantiyede toplanır. Taşeron grupları taşeron deposu olarak açılır; hangi şantiyede olduğunu yazabilirsiniz."),
+        liste,
+        h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Wolvox grubu", "Fatura", "Tutar (KDV dahil)", "Nereye", "Adı", ""].map((b) => h("th", {}, b)))),
+          h("tbody", {}, o.gruplar.map(satir)))),
+        h("p", {}, h("button", { class: "dugme ana", onclick: async (e) => {
+          const eksik = o.gruplar.find((g) => kararlar[g.grup].tur !== "yok" && !kararlar[g.grup].ad.trim());
+          if (eksik) return bildir(`'${eksik.grup || "(grupsuz)"}' grubunun adı boş.`, true);
+          if (!confirm(`${o.aktarilacak} fatura aktarılsın mı? Önce yedek alınır; istediğiniz zaman "Geri al" ile silebilirsiniz.`)) return;
+          e.target.disabled = true;
+          try {
+            durum("Yedek alınıyor ve faturalar aktarılıyor (birkaç dakika sürebilir)…");
+            const fd = new FormData(); fd.append("dosya", dosya); fd.append("eslesme", JSON.stringify(kararlar));
+            const r = await api("/api/wolvox/aktar", { metod: "POST", dosya: fd });
+            onizleme = null;
+            durum("Hazır");
+            bildir(`${r.fatura_sayisi} fatura aktarıldı${r.atlanan ? `, ${r.atlanan} fatura zaten vardı` : ""}. ${r.acilan_santiye} şantiye, ${r.acilan_depo} depo açıldı.`);
+            for (const a of ["santiye-ozet", "santiye-faturalari", "rapor-malzeme-gelen", "malzeme-kartlari"]) listeyiTazele(a);
+            yenidenCiz();
+            if (r.benzer_malzeme && await secimSor("Benzer stok adları",
+              `Yazılışı aynı olan stok adları (ör. "3x25 NYA" ve "3x25 nya-") kendiliğinden birleştirildi. ${r.benzer_malzeme} stok adı bir başka malzemeye benziyor; birleştirilsin mi diye listede sorulur.`,
+              [[true, "Listeyi aç", true], [false, "Sonra"]])) malzemeEslestirmeAc();
+          } catch (err) { durum("Hazır"); bildir(err.message, true); e.target.disabled = false; }
+        } }, `${o.aktarilacak} faturayı aktar`)));
+    },
+    yenile: () => yenidenCiz(),
+  });
+}
+
 // ---------------------------------------------------------------- modül menüsü
 const MODULLER = [
-  ["Fatura", [["Belgeden Fatura Oku", aiOkumaAc], ["Alış Faturaları", () => faturaListesiAc("gelen")], ["Satış Faturaları", () => faturaListesiAc("giden")]]],
+  ["Fatura", [["Belgeden Fatura Oku", aiOkumaAc], ["Alış Faturaları", () => faturaListesiAc("gelen")], ["Satış Faturaları", () => faturaListesiAc("giden")],
+    ["Wolvox'tan Aktar", wolvoxAktarAc]]],
   ["Malzeme", [["Malzeme Bazlı Alışlar", () => malzemeRaporuAc("gelen")], ["Malzeme Bazlı Satışlar", () => malzemeRaporuAc("giden")],
     ["Benzer Malzemeleri Eşleştir", malzemeEslestirmeAc], ["Malzeme Kartları", malzemeListesiAc]]],
   ["Günlük Takip", [["Hızlı Arama (F3)", () => hizliAramaAc()], ["Ödeme Takvimi / Nakit Akışı", odemeTakvimiAc], ["Düzenli Ödemeler", duzenliOdemelerAc]]],

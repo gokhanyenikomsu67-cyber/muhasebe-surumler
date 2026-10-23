@@ -15,7 +15,7 @@ from . import gecmis as degisiklik_gecmisi
 from .db import Base, SessionLocal, db_guncelle, engine
 from .models import Kullanici
 from .routers import (aktarim, banka, cekler, faturalar, gecmis, kartlar, kolaylik, malzemeler, mali, mutabakat, raporlar,
-                      reddedilen, taseron, temel, yazdir)
+                      reddedilen, taseron, temel, wolvox, yazdir)
 
 Base.metadata.create_all(engine)
 degisiklik_gecmisi.kur(SessionLocal)
@@ -37,6 +37,7 @@ app.include_router(mutabakat.router)
 app.include_router(reddedilen.router)
 app.include_router(taseron.router)
 app.include_router(malzemeler.router)
+app.include_router(wolvox.router)
 
 WEB = Path(__file__).resolve().parents[2] / "web"
 app.mount("/web", StaticFiles(directory=WEB), name="web")
@@ -153,7 +154,7 @@ def verileri_sifirla(istek: Sifirlama, k: Kullanici = Depends(yazabilir)):
     düzenli ödemeler. Firma bilgileri ve kullanıcılar kalır. Önce yedek alınır (Yedekler > "Bu yedeğe dön" ile geri gelir)."""
     from sqlalchemy import delete, select, update
     from .models import (BankaHesabi, Cari, Cek, Degisiklik, Depo, DuzenliOdeme, Fatura, FaturaKalem, Hareket, IsyeriEslesme,
-                         Malzeme, RedFatura, Santiye, TaseronGider)
+                         Malzeme, RedFatura, Santiye, TaseronGider, WolvoxAktarim)
     from .routers.faturalar import KAYIT_KILIDI
     if k.rol != "sahip":
         raise HTTPException(403, "Verileri sadece sahip sıfırlayabilir.")
@@ -174,7 +175,7 @@ def verileri_sifirla(istek: Sifirlama, k: Kullanici = Depends(yazabilir)):
             db.execute(update(Hareket).where(Hareket.sirket_id == sid).values(bagli_hareket_id=None))
             db.execute(delete(FaturaKalem).where(FaturaKalem.fatura_id.in_(select(Fatura.id).where(Fatura.sirket_id == sid))))
             for model in (Degisiklik, DuzenliOdeme, TaseronGider, Hareket, Cek, Fatura, RedFatura, IsyeriEslesme, BankaHesabi, Depo,
-                          Santiye, Malzeme, Cari):
+                          Santiye, Malzeme, WolvoxAktarim, Cari):
                 db.execute(delete(model).where(model.sirket_id == sid))
             db.commit()
             # Hiçbir kayda bağlı kalmayan belgeler (fatura/çek dosyaları) de silinir; yedekte duruyorlar
