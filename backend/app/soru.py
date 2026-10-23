@@ -34,6 +34,7 @@ harcamalari harcanan gider gideri giderleri gelir geliri toplam toplami bu ay ay
 cek cekler cekleri ceki senet senetler banka bankalar kasa hesap hesaplar ve ile mi mu kac para tl son durum durumu var
 lutfen bot muhasebe soyle goster ver yaz bana bize acaba icin olan olarak tum hepsi butun genel ozet vade vadesi gelen
 gelecek odenecek odeyecegimiz alinan verilen tahsil kalan nedir kadardir simdiye simdiki su an anki
+odenmemis odenmeyen tahsil edilmemis edilmeyen bekleyen kac tane adet listesi liste
 """.split()) | set(AYLAR)
 
 
@@ -174,7 +175,7 @@ def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None
     if cari:
         q = q.where(Cek.cari_id == cari.id)
     yon = None
-    if any(x in w for x in ("verilen", "odenecek", "odeyecegimiz", "odeme", "verdigimiz", "kestigimiz")):
+    if any(x in w for x in ("verilen", "odenecek", "odeyecegimiz", "odeme", "verdigimiz", "kestigimiz", "odenmemis", "odenmeyen")):
         yon = "verilen"
     elif any(x in w for x in ("alinan", "aldigimiz", "tahsil", "portfoy", "portfoydeki", "musteri")):
         yon = "alinan"
@@ -184,7 +185,9 @@ def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None
     gun = next((int(m.group(1)) for m in [re.search(r"\b(\d{1,3}) gun", s)] if m), None)
     if gun is not None:
         bit, etiket = bugun + timedelta(days=gun), f"{gun} gün içinde"
-    if any(x in w for x in ("tum", "hepsi", "butun", "portfoy", "portfoydeki")) and not etiket:
+    # "kaç para ödenmemiş çek var", "toplam çek": dönem söylenmediyse vadesi gelmemiş bütün açık çekler
+    if any(x in w for x in ("tum", "hepsi", "butun", "portfoy", "portfoydeki", "toplam", "kac", "odenmemis", "odenmeyen",
+                            "edilmemis", "bekleyen")) and not etiket:
         bit, etiket = None, "tümü"
     elif not etiket and not cari:
         bit, etiket = bugun + timedelta(days=7), "7 gün içinde"
@@ -314,13 +317,14 @@ def genel_durum(db: Session, k: Kullanici, bugun: date) -> str:
 
 # --- Soruyu anlama ----------------------------------------------------------
 
-def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, sohbet: bool = False) -> str | None:
+def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, sohbet: bool = False,
+            hitap: bool = False) -> str | None:
     """Sorunun cevabı; anlaşılmazsa None (WhatsApp'ta sohbet mesajlarına karışmamak için sessiz kalınır).
     sohbet=True (WhatsApp grubu): uzun yazıda yalnız ad geçiyorsa ("yarın Gebze'ye gidiyorum") cevap verilmez; soru kelimesi
     (harcama, bakiye, çek, banka...), soru işareti ya da kısa yazı (en çok 4 kelime) gerekir. Anlaşılmayan kısa yazıya
-    "Anlayamadım, yardım yazın" denir; "tamam", "sağol" gibi sohbete cevap verilmez."""
+    "Anlayamadım, yardım yazın" yalnız bota yazılınca (hitap: @bahsedildi ya da botun mesajına yanıt) denir."""
     bugun = bugun or date.today()
-    s = kural.sade(metin).strip(" ?!.")
+    s = kural.sade(re.sub(r"@\d+", " ", metin)).strip(" ?!.")  # WhatsApp'ta @bahsetme numara olarak gelir
     w = _kelimeler(s)
     if not w:
         return None
@@ -341,9 +345,9 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
     cari_kelimesi = any(x.startswith(("bakiy", "borc", "alaca", "cari", "ekstre")) for x in w)
     # Grupta kısa yazı (en çok 4 kelime) soru sayılır: "gebze", "gebze santiesi", "ahmet yapı"
     kisa = len(w) <= 4 and not set(w) <= _SOHBET
-    anlamadim = ANLAMADIM if sohbet and kisa else None
+    anlamadim = ANLAMADIM if sohbet and hitap else None
 
-    if sohbet and not (cek_sorusu or banka_sorusu or santiye_kelimesi or cari_kelimesi or kisa or metin.strip().endswith("?")):
+    if sohbet and not (cek_sorusu or banka_sorusu or santiye_kelimesi or cari_kelimesi or kisa or hitap or metin.strip().endswith("?")):
         return None
 
     if banka_sorusu and not cari_kelimesi or banka_sorusu and ws & {"bakiyeleri", "bakiyemiz"}:

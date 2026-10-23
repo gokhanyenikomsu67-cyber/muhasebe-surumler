@@ -112,7 +112,14 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
         for m in ("gebze santiesi", "Gebze", "gebze şantiyesi ne durumda"):
             assert "Gebze Fabrika" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": m}).json()["cevap"], m
         assert "Demir Çelik" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "demir çelik"}).json()["cevap"]
-        assert "yardım" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "kasım raporu"}).json()["cevap"]
+        # Anlaşılmayan yazıya yalnız bota yazılınca (@bahsetme ya da yanıt) "yardım yazın" denir; sohbete karışılmaz
+        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "kasım raporu"}).json()["cevap"] is None
+        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": ".... Yedik"}).json()["cevap"] is None
+        assert "yardım" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "kasım raporu",
+                                                                   "hitap": True}).json()["cevap"]
+        c = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "@123456789 kaç para ödenmemiş çek var",
+                                                    "hitap": True}).json()["cevap"]
+        assert "600,00 TL" in c and "4.000,00 TL" not in c, c
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "tamam teşekkürler"}).json()["cevap"] is None
         # Ekranda son gelenler: kim, ne yazdı, ne yapıldı
         son = bot.MESAJLAR[-2:]
@@ -120,6 +127,8 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
         # Tanınmayan kişi: cevap yok, ekranda listelenir
         r = client.post(yol, headers=anahtar, json={"gonderen": "905009998877@s.whatsapp.net", "ad": "Yabancı", "metin": "banka"})
         assert r.json()["cevap"] is None and any(x["ad"] == "Yabancı" and not x["tanindi"] for x in bot.MESAJLAR)
+        r = client.post(yol, headers=anahtar, json={"gonderen": "905009998877@s.whatsapp.net", "metin": "banka", "hitap": True})
+        assert "iznim yok" in r.json()["cevap"] and "Halkbank" not in r.json()["cevap"]
     finally:
         R.YEREL.discard("testclient")
 

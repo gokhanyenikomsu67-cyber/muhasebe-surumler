@@ -31,6 +31,7 @@ class KopruMesaji(BaseModel):
     ad: str | None = None       # kişinin WhatsApp'taki adı
     metin: str
     grup: str | None = None     # grup adı (özel mesajda boş)
+    hitap: bool = False         # bota yazıldı: @bahsedildi, botun mesajına yanıt ya da özel mesaj
 
 
 class KopruDurumu(BaseModel):
@@ -169,7 +170,9 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
                        .where((BotNumarasi.telefon.in_(adaylar)) | (BotNumarasi.kimlik.in_(adaylar)))).first()
     if not kayit or not kayit.kullanici:
         bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin, "Cevap verilmedi: kişi listede yok", tanindi=False)
-        return {"cevap": None}
+        # Bota doğrudan yazdıysa neden cevap alamadığını bilsin (bilgi verilmez)
+        return {"cevap": "Bu numaraya cevap verme iznim yok. Programda Araçlar > WhatsApp Botu ekranından eklenmeniz gerekiyor."
+                if veri.hitap else None}
     # Grupta numara yerine gizli kimlik (@lid) gelir: numarasıyla tanınan kişinin kimliği öğrenilir
     lid = next((bot.rakamlar(y) for y in (veri.gonderen, veri.gonderen_alt) if y and y.endswith("@lid")), None)
     if lid and kayit.kimlik != lid:
@@ -178,7 +181,7 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     k = kayit.kullanici
     db.info["kullanici_id"] = k.id
     try:
-        cevap = soru.cevapla(db, k, veri.metin, sohbet=True)
+        cevap = soru.cevapla(db, k, veri.metin, sohbet=True, hitap=veri.hitap)
     except Exception as e:  # noqa: BLE001
         bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, kayit.ad, veri.metin, f"Hata: {e}")
         return {"cevap": "Bir hata oluştu, programda WhatsApp Botu ekranına bakın."}

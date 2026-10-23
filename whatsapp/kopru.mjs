@@ -50,6 +50,15 @@ setInterval(async () => {
   }
 }, 30_000)
 
+// Mesajın bağlamı (bahsedilenler, yanıtlanan mesajın sahibi)
+function baglam(m) {
+  const ic = m.message?.ephemeralMessage?.message || m.message
+  return ic?.extendedTextMessage?.contextInfo || {}
+}
+
+// "905321234567:12@s.whatsapp.net" -> "905321234567"
+const kimlikNo = (jid) => (jid || '').split('@')[0].split(':')[0]
+
 function yazi(m) {
   const icerik = m.message
   if (!icerik) return ''
@@ -116,14 +125,25 @@ async function baglan() {
         if (!m.message || m.key.fromMe) continue
         const sohbet = m.key.remoteJid
         if (!sohbet || sohbet === 'status@broadcast') continue
-        const metin = yazi(m).trim()
-        if (!metin || metin.length > 300) continue
+        const hamMetin = yazi(m).trim()
+        if (!hamMetin || hamMetin.length > 300) continue
         const grup = isJidGroup(sohbet)
         const gonderen = grup ? m.key.participant : sohbet
-        const alt = grup ? (m.key.participantAlt || m.key.participantPn) : (m.key.remoteJidAlt || m.key.senderPn)
+        let alt = grup ? (m.key.participantAlt || m.key.participantPn) : (m.key.remoteJidAlt || m.key.senderPn)
         if (!gonderen) continue
+        // Grupta numara gizliyse (@lid) WhatsApp'ın eşlemesinden numara bulunur
+        if (!alt && gonderen.endsWith('@lid')) {
+          try { alt = await sock.signalRepository?.lidMapping?.getPNForLID(gonderen) } catch { /* bulunamadı */ }
+        }
+        // Bota yazıldı mı: @bahsedildi ya da botun mesajına yanıt verildi (özel mesaj her zaman bota yazılmıştır)
+        const benim = new Set([kimlikNo(sock.user?.id), kimlikNo(sock.user?.lid)].filter(Boolean))
+        const b = baglam(m)
+        const hitap = !grup || (b.mentionedJid || []).some((j) => benim.has(kimlikNo(j))) || benim.has(kimlikNo(b.participant))
+        const metin = hamMetin.replace(/@\d+/g, ' ').replace(/\s+/g, ' ').trim()
+        if (!metin) continue
         const { cevap } = await programa('mesaj', {
-          gonderen, gonderen_alt: alt || null, ad: m.pushName || null, metin, grup: grup ? await grupAdi(sock, sohbet) : null
+          gonderen, gonderen_alt: alt || null, ad: m.pushName || null, metin, hitap,
+          grup: grup ? await grupAdi(sock, sohbet) : null
         })
         if (cevap) await sock.sendMessage(sohbet, { text: cevap }, { quoted: m })
       } catch (e) {
