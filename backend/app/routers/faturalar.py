@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from .. import ai, karekod, kural, ocr, schemas, tani
+from .. import ai, karekod, kural, malzeme, ocr, schemas, tani
 from ..auth import aktif_kullanici, yazabilir
 from ..db import VERI_KLASORU, get_db
 from ..models import GIDER_TURLERI, Cari, Depo, Fatura, FaturaKalem, Kullanici, RedFatura, Santiye, Sirket
@@ -102,12 +102,13 @@ def mukerrer_mi(db: Session, f: Fatura) -> bool:
     )))
 
 
-@router.get("", response_model=list[schemas.FaturaCikis])
+@router.get("")
 def listele(
     yon: str | None = None, durum: str | None = None, cari_id: int | None = None,
-    santiye_id: int | None = None, baslangic: date | None = None, bitis: date | None = None,
+    santiye_id: int | None = None, baslangic: date | None = None, bitis: date | None = None, ozet: bool = False,
     db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici),
 ):
+    """ozet=1: liste ekranı için hafif satırlar (kalemsiz); binlerce faturada (Wolvox aktarımı) liste çabuk gelsin."""
     q = select(Fatura).where(Fatura.sirket_id == k.sirket_id)
     for alan, deger in [(Fatura.yon, yon), (Fatura.durum, None if durum == "kayitli" else durum), (Fatura.cari_id, cari_id)]:
         if deger is not None:
@@ -120,9 +121,30 @@ def listele(
         q = q.where(Fatura.tarih >= baslangic)
     if bitis:
         q = q.where(Fatura.tarih <= bitis)
-    q = q.order_by(Fatura.tarih.desc().nulls_first(), Fatura.id.desc()).options(
-        selectinload(Fatura.kalemler).joinedload(FaturaKalem.santiye), joinedload(Fatura.cari), joinedload(Fatura.santiye))
+    q = q.order_by(Fatura.tarih.desc().nulls_first(), Fatura.id.desc())
+    if ozet:
+        return _ozet_satirlari(db, k, db.scalars(q.options(joinedload(Fatura.cari))).unique().all())
+    q = q.options(selectinload(Fatura.kalemler).joinedload(FaturaKalem.santiye), joinedload(Fatura.cari), joinedload(Fatura.santiye))
     return [cikis(f) for f in db.scalars(q).unique().all()]
+
+
+def _ozet_satirlari(db: Session, k: Kullanici, faturalar: list[Fatura]) -> list[dict]:
+    adlar = dict(db.execute(select(Santiye.id, Santiye.ad).where(Santiye.sirket_id == k.sirket_id)).all())
+    kalem_santiyeleri: dict[int, list] = {}
+    for fid, sid in db.execute(select(FaturaKalem.fatura_id, FaturaKalem.santiye_id).join(Fatura)
+                               .where(Fatura.sirket_id == k.sirket_id).order_by(FaturaKalem.id)):
+        kalem_santiyeleri.setdefault(fid, []).append(sid)
+    sonuc = []
+    for f in faturalar:
+        sidler = [sid or f.santiye_id for sid in kalem_santiyeleri.get(f.id, [])] or [f.santiye_id]
+        karsi = ((f.ai_okuma or {}).get("satici" if f.yon == "gelen" else "alici") or {}) if not f.cari else {}
+        sonuc.append({
+            "id": f.id, "yon": f.yon, "durum": f.durum, "fatura_no": f.fatura_no, "tarih": f.tarih, "cari_id": f.cari_id,
+            "cari_unvan": f.cari.unvan if f.cari else None, "karsi_unvan": karsi.get("unvan") if isinstance(karsi, dict) else None,
+            "santiye_ad": ", ".join(adlar[i] for i in dict.fromkeys(sidler) if i in adlar) or None,
+            "gider_turu": f.gider_turu, "ara_toplam": f.ara_toplam, "kdv_toplam": f.kdv_toplam, "genel_toplam": f.genel_toplam,
+            "para_birimi": f.para_birimi, "kalem_sayisi": len(kalem_santiyeleri.get(f.id, []))})
+    return sonuc
 
 
 @router.get("/sonraki-no")
@@ -301,7 +323,7 @@ def onayla(fatura_id: int, db: Session = Depends(get_db), k: Kullanici = Depends
     elif kendi_firmamiz_mi(db, f.cari, k.sirket_id):
         raise HTTPException(400, "Kendi firmanız faturanın carisi olamaz; faturadaki karşı firmayı seçin.")
     if not f.kalemler:
-        raise HTTPException(400, "Faturada kalem yok.")
+        raise HTTPException(400, "Faturada kalem yok; faturayı açıp kalem girin ya da silin.")
     if (f.para_birimi or "TRY") not in ("TRY", "TL") and not float(f.kur or 0):
         raise HTTPException(400, f"Fatura {f.para_birimi} cinsinden; onaylamak için kuru (1 {f.para_birimi} kaç TL) girin.")
     if mukerrer_mi(db, f):
@@ -326,7 +348,10 @@ def toplu_onayla(istek: TopluOnay, db: Session = Depends(get_db), k: Kullanici =
             onaylanan += 1
         except HTTPException as e:
             db.rollback()
-            hatalar.append(f"#{fid}: {e.detail}")
+            f = db.get(Fatura, fid)
+            firma = (f.cari.unvan if f.cari else ((f.ai_okuma or {}).get("satici" if f.yon == "gelen" else "alici") or {}).get("unvan")) if f else None
+            ad = (f.fatura_no if f and f.fatura_no else f"#{fid}") + (f" ({firma})" if firma else "")
+            hatalar.append(f"{ad}: {e.detail}")
     return {"onaylanan": onaylanan, "hatalar": hatalar}
 
 
@@ -800,13 +825,34 @@ def wolvox_faturasi(db: Session, sirket_id: int, okunan: dict, yon: str) -> Fatu
     return adaylar[0] if adaylar else None
 
 
+def wolvox_yerine_gec(db: Session, f: Fatura, wolvox: Fatura) -> str:
+    """Belgeden okunan fatura Wolvox kaydının yerine geçer: kalemlere Wolvox'taki şantiye/depo eşlenir (kalem okunamadıysa
+    Wolvox kalemleri alınır), Wolvox kaydı silinir."""
+    if not f.kalemler and wolvox.kalemler:
+        kalemleri_yaz(f, [schemas.KalemGiris(
+            aciklama=kl.aciklama, miktar=float(kl.miktar or 0), birim=kl.birim, birim_fiyat=float(kl.birim_fiyat or 0),
+            kdv_orani=float(kl.kdv_orani or 0), tutar=float(kl.tutar or 0), kdv_tutari=float(kl.kdv or 0),
+            santiye_id=kl.santiye_id, depo_id=kl.depo_id) for kl in wolvox.kalemler])
+        not_ = "Belgede kalem okunamadı; kalemler Wolvox kaydından alındı, belgeyle karşılaştırın."
+    else:
+        yerler = malzeme.yerleri_esle([(kl.aciklama, float(kl.tutar or 0)) for kl in f.kalemler],
+                                      [(kl.aciklama, float(kl.tutar or 0), (kl.santiye_id or wolvox.santiye_id, kl.depo_id))
+                                       for kl in wolvox.kalemler])
+        for kl, yer in zip(f.kalemler, yerler):
+            if yer and yer[0] and not kl.santiye_id:
+                kl.santiye_id, kl.depo_id = yer
+        not_ = "Bu fatura Wolvox aktarımında vardı; Wolvox kaydının yerine geçti, şantiyesi alındı."
+    db.delete(wolvox)
+    db.flush()
+    return not_
+
+
 def taslak_olustur(db: Session, k: Kullanici, okunan: dict, yon: str, santiyeler, dosya_adi: str | None = None) -> Fatura:
     karsi = okunan.get("satici") if yon == "gelen" else okunan.get("alici")
     karsi = karsi or {}
-    if eski := wolvox_faturasi(db, k.sirket_id, okunan, yon):
-        # Wolvox'tan aktarılmış geçmiş fatura: ikinci kez kaydedilmez, cari de açılmaz; ekranda "zaten var" yazar
-        eski._zaten_var = True
-        return eski
+    # Wolvox'tan aktarılmış geçmiş fatura: belge gelince asıl kayıt olur, Wolvox kaydının şantiyesini/depolarını alıp
+    # onun yerine geçer (aynı fatura iki kez sayılmaz)
+    wolvox = wolvox_faturasi(db, k.sirket_id, okunan, yon)
     # Cari VKN ya da ünvanla bulunur; yoksa faturadaki bilgilerle hemen açılır.
     cari, yeni_cari = cari_bul_ya_ac(db, k, karsi, "tedarikci" if yon == "gelen" else "musteri")
     if cari and okunan.get("fatura_no") and not yeni_cari:
@@ -847,6 +893,8 @@ def taslak_olustur(db: Session, k: Kullanici, okunan: dict, yon: str, santiyeler
     # uyarilar: kontrol edilmesi gereken sorunlar. bilgi: işlemi anlatan notlar (uyarı sayılmaz).
     uyarilar = ai.tutarlilik_uyarilari(okunan)
     bilgi = []
+    if wolvox is not None:
+        bilgi.append(wolvox_yerine_gec(db, f, wolvox))
     uyarilar += toplam_farki(f, okunan)
     if cari and cari.unvan == f"VKN {cari.vkn}":
         uyarilar.append("Firmanın adı faturada yazmıyor; cariye adını bir kez yazın.")

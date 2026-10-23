@@ -199,6 +199,8 @@ class WolvoxAktarim(Base):
     toplam: Mapped[float] = mapped_column(Para, default=0)
     acilan_santiyeler: Mapped[list | None] = mapped_column(JSON)
     acilan_depolar: Mapped[list | None] = mapped_column(JSON)
+    # Sistemde zaten olan faturaların şantiyesi boş kalemlerine işlenen yerler: [[kalem id, eski şantiye, eski depo]]
+    islenen_kalemler: Mapped[list | None] = mapped_column(JSON)
 
 
 class Malzeme(Base):

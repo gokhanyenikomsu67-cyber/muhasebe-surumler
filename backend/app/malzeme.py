@@ -234,3 +234,23 @@ def guncelle(db: Session, sirket_id: int) -> tuple[Dizin, list[dict]]:
         bekleyen.append({"ad": ad, "kalem_sayisi": len(grup), "oneriler": liste,
                          "kalemler": sorted((_kalem_ozeti(k) for k in grup), key=lambda x: x["tarih"], reverse=True)})
     return dizin, bekleyen
+
+
+def yerleri_esle(hedefler: list[tuple[str, float]], kaynaklar: list[tuple[str, float, tuple]]) -> list[tuple | None]:
+    """Bir faturanın kalemlerine aynı faturanın başka kaydındaki (Wolvox) kalemlerin yerini (şantiye, depo) eşler.
+    hedefler: [(ad, tutar)], kaynaklar: [(ad, tutar, yer)]. Kaynaktaki kalemlerin hepsi aynı yerdeyse hepsi oraya;
+    değilse tutarı aynı ya da adı benzeyen kalemin yeri alınır, eşleşmeyene None."""
+    yerler = {y for *_, y in kaynaklar}
+    if len(yerler) == 1:
+        return [next(iter(yerler))] * len(hedefler)
+    kalan = list(kaynaklar)
+    sonuc = []
+    for ad, tutar in hedefler:
+        en, en_puan = None, 0.0
+        for i, (kad, ktutar, _) in enumerate(kalan):
+            oran = karsilastir(anahtar(ad), anahtar(kad))[0]
+            puan = (2 if abs(ktutar - tutar) < 0.05 else 0) + (oran if oran >= 0.6 else 0)
+            if puan > en_puan:
+                en, en_puan = i, puan
+        sonuc.append(kalan.pop(en)[2] if en is not None else None)
+    return sonuc

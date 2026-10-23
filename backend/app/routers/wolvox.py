@@ -148,20 +148,28 @@ def oku(icerik: bytes) -> dict:
 
 
 def _kayitli(db: Session, sirket_id: int) -> dict[tuple, list[tuple]]:
-    """Sistemdeki faturalar (iptal hariç): (yön, fatura no) -> [(tarih, toplam, firma adı)]."""
+    """Sistemdeki faturalar (iptal hariç): (yön, fatura no) -> [(tarih, toplam, firma adı, fatura id, Wolvox aktarımı mı)]."""
     sonuc = defaultdict(list)
     for f in db.scalars(select(Fatura).where(Fatura.sirket_id == sirket_id, Fatura.durum != "iptal", Fatura.fatura_no.is_not(None))
                         .options(joinedload(Fatura.cari))):
-        sonuc[(f.yon, f.fatura_no.strip())].append((f.tarih, float(f.genel_toplam or 0), kural.ad_anahtari(firma_adi(f))))
+        sonuc[(f.yon, f.fatura_no.strip())].append((f.tarih, float(f.genel_toplam or 0), kural.ad_anahtari(firma_adi(f)),
+                                                    f.id, f.durum == "aktarim"))
     return sonuc
 
 
-def _sistemde_var(kayitli: dict, f: dict) -> bool:
-    """Aynı fatura no ve aynı tarih ya da aynı toplam; iki firmanın adı da biliniyorsa ilk kelimeleri aynı olmalı
-    (farklı firmalar aynı numarayı kullanabilir)."""
+def _sistemdeki(kayitli: dict, f: dict) -> tuple[int, bool] | None:
+    """Sistemdeki aynı fatura (id, Wolvox aktarımı mı): aynı fatura no ve aynı tarih ya da aynı toplam; iki firmanın adı
+    da biliniyorsa ilk kelimeleri aynı olmalı (farklı firmalar aynı numarayı kullanabilir)."""
     firma = kural.ad_anahtari(f["firma"])
-    return any((t == f["tarih"] or abs(top - f["toplam"]) < 1) and (not firma or not fa or firma.split()[0] == fa.split()[0])
-               for t, top, fa in kayitli.get((f["yon"], f["fatura_no"]), []))
+    return next(((fid, aktarim) for t, top, fa, fid, aktarim in kayitli.get((f["yon"], f["fatura_no"]), [])
+                 if (t == f["tarih"] or abs(top - f["toplam"]) < 1) and (not firma or not fa or firma.split()[0] == fa.split()[0])),
+                None)
+
+
+def _bos_kalemler(db: Session, fatura_id: int) -> tuple[Fatura, list[FaturaKalem]]:
+    """Sistemdeki faturanın şantiyesi yazılmamış kalemleri (faturanın kendi şantiyesi de yoksa)."""
+    f = db.get(Fatura, fatura_id)
+    return f, ([] if f.santiye_id else [kl for kl in f.kalemler if not kl.santiye_id])
 
 
 def _taseron_mu(ad: str) -> bool:
@@ -211,11 +219,16 @@ def onizle(dosya: UploadFile = File(...), db: Session = Depends(get_db), k: Kull
     santiyeler = list(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)))
     depolar = list(db.scalars(select(Depo).where(Depo.sirket_id == k.sirket_id)))
     gruplar: dict = defaultdict(lambda: {"kalem": 0, "faturalar": set(), "toplam": 0.0})
-    var = 0
+    var = islenecek = dolu = 0
     for i, f in enumerate(fs):
-        if _sistemde_var(kayitli, f):
-            var += 1
-            continue
+        if esli := _sistemdeki(kayitli, f):
+            if esli[1]:
+                var += 1  # önceki Wolvox aktarımında var
+                continue
+            if not _bos_kalemler(db, esli[0])[1]:
+                dolu += 1  # belgeden girilmiş, şantiyesi zaten yazılı: dokunulmaz
+                continue
+            islenecek += 1
         for kl in f["kalemler"]:
             g = gruplar[kl["grup"] or ""]
             g["kalem"] += 1
@@ -224,7 +237,8 @@ def onizle(dosya: UploadFile = File(...), db: Session = Depends(get_db), k: Kull
     adlar = [g for g in gruplar if g]
     stoklar = {malzeme._bitisik(malzeme.anahtar(kl["aciklama"])) for f in fs for kl in f["kalemler"]}
     return {
-        "dosya": dosya.filename, "fatura_sayisi": len(fs), "aktarilacak": len(fs) - var, "zaten_var": var,
+        "dosya": dosya.filename, "fatura_sayisi": len(fs), "aktarilacak": len(fs) - var - islenecek - dolu, "zaten_var": var,
+        "santiye_islenecek": islenecek, "santiyesi_dolu": dolu,
         "iade_sayisi": sum(1 for f in fs if f["iade"]), "kalem_sayisi": sum(len(f["kalemler"]) for f in fs),
         "firma_sayisi": len({kural.ad_anahtari(f["firma"]) for f in fs}), "stok_adi_sayisi": len(stoklar),
         "ilk_tarih": fs[0]["tarih"], "son_tarih": fs[-1]["tarih"], "atlanan_satir": veri["atlanan_satir"][:50],
@@ -306,18 +320,42 @@ def aktar(dosya: UploadFile = File(...), eslesme: str = Form("{}"), db: Session 
         kayitli = _kayitli(db, k.sirket_id)
         hedef = _Hedefler(db, k.sirket_id)
         gruplar = sorted({kl["grup"] for f in veri["faturalar"] for kl in f["kalemler"] if kl["grup"]})
-        yerler: dict = {}
+        yer_bellegi: dict = {}
+
+        def yeri(g):  # şantiye/depo yalnız gerçekten kalem yazılacaksa açılır
+            if g not in yer_bellegi:
+                karar = kararlar.get(g or "") or _oneri(g, hedef.santiyeler, hedef.depolar, gruplar)
+                yer_bellegi[g] = hedef.kalem_yeri(karar)
+            return yer_bellegi[g]
+
+        # Adlar her zaman aynı sırayla çözülsün (aynı ada eşlenen gruplarda ilk açılanın adı kalır)
+        kullanilan = {kl["grup"] for f in veri["faturalar"] if not ((e := _sistemdeki(kayitli, f)) and e[1]) for kl in f["kalemler"]}
         for g in [None, *gruplar]:
-            karar = kararlar.get(g or "") or _oneri(g, hedef.santiyeler, hedef.depolar, gruplar)
-            yerler[g] = hedef.kalem_yeri(karar)
+            if g in kullanilan:
+                yeri(g)
         a = WolvoxAktarim(sirket_id=k.sirket_id, dosya=(dosya.filename or "")[:255])
         db.add(a)
         db.flush()
-        sayi = atlanan = 0
+        sayi = atlanan = islenen = 0
         toplam = 0.0
+        islenen_kalemler = []
         for f in veri["faturalar"]:
-            if _sistemde_var(kayitli, f):
+            if esli := _sistemdeki(kayitli, f):
                 atlanan += 1
+                if esli[1]:
+                    continue
+                # Belgeden girilmiş fatura: yalnız şantiyesi boş kalemlerine Wolvox grubunun yeri yazılır
+                asil, bos = _bos_kalemler(db, esli[0])
+                if not bos:
+                    continue
+                kaynak = [(kl["aciklama"], kl["tutar"], yeri(kl["grup"])) for kl in f["kalemler"] if yeri(kl["grup"])[0]]
+                if not kaynak:
+                    continue
+                for kl, yer in zip(bos, malzeme.yerleri_esle([(kl.aciklama, float(kl.tutar or 0)) for kl in bos], kaynak)):
+                    if yer:
+                        islenen_kalemler.append([kl.id, kl.santiye_id, kl.depo_id])
+                        kl.santiye_id, kl.depo_id = yer
+                islenen += 1
                 continue
             yeni = Fatura(sirket_id=k.sirket_id, yon=f["yon"], durum="aktarim", fatura_no=f["fatura_no"][:50], tarih=f["tarih"],
                           fatura_tipi="IADE" if f["iade"] else None,
@@ -327,16 +365,17 @@ def aktar(dosya: UploadFile = File(...), eslesme: str = Form("{}"), db: Session 
                 aciklama=kl["aciklama"], miktar=kl["miktar"], birim=kl["birim"],
                 birim_fiyat=round(kl["tutar"] / kl["miktar"], 4) if kl["miktar"] else kl["tutar"],
                 kdv_orani=_kdv_orani(kl["tutar"], kl["kdv"]), tutar=kl["tutar"], kdv_tutari=kl["kdv"],
-                santiye_id=yerler[kl["grup"]][0], depo_id=yerler[kl["grup"]][1]) for kl in f["kalemler"]])
+                santiye_id=yeri(kl["grup"])[0], depo_id=yeri(kl["grup"])[1]) for kl in f["kalemler"]])
             db.add(yeni)
             sayi += 1
             toplam += -f["toplam"] if f["iade"] else f["toplam"]
         a.fatura_sayisi, a.atlanan, a.toplam = sayi, atlanan, round(toplam, 2)
+        a.islenen_kalemler = islenen_kalemler
         a.acilan_santiyeler, a.acilan_depolar = hedef.acilan_santiyeler, hedef.acilan_depolar
         db.commit()
         # Stok adları malzeme kartlarına bağlanır; yazılışı aynı olanlar tek kart, benzerleri sorulmak üzere bekler
         _, bekleyen = malzeme.guncelle(db, k.sirket_id)
-    return {"id": a.id, "fatura_sayisi": sayi, "atlanan": atlanan, "toplam": a.toplam,
+    return {"id": a.id, "fatura_sayisi": sayi, "atlanan": atlanan - islenen, "santiye_islenen": islenen, "toplam": a.toplam,
             "acilan_santiye": len(hedef.acilan_santiyeler), "acilan_depo": len(hedef.acilan_depolar),
             "benzer_malzeme": len(bekleyen)}
 
@@ -361,6 +400,9 @@ def geri_al(aktarim_id: int, db: Session = Depends(get_db), k: Kullanici = Depen
             raise HTTPException(500, f"Önce yedek alınamadı, hiçbir şey silinmedi: {e}") from e
         idler = [f.id for f in db.scalars(select(Fatura).where(Fatura.sirket_id == k.sirket_id, Fatura.durum == "aktarim"))
                  if (f.ai_okuma or {}).get("aktarim") == a.id]
+        for kid, sid, did in a.islenen_kalemler or []:  # sistemdeki faturalara yazılan şantiyeler geri alınır
+            if kl := db.get(FaturaKalem, kid):
+                kl.santiye_id, kl.depo_id = sid, did
         for i in range(0, len(idler), 500):
             parca = idler[i:i + 500]
             db.execute(delete(FaturaKalem).where(FaturaKalem.fatura_id.in_(parca)))

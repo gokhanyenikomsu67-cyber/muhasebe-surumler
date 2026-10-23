@@ -307,6 +307,8 @@ function listeEkrani({ baslik, kaynak, kolonlar, yeni, yeniYazi, ac, sil, silSor
         sayac.textContent = `${isaretli.size} seçili`;
         tumu.checked = gorunen.length > 0 && gorunen.every((s) => isaretli.has(s.id));
       }
+      tbody.replaceChildren(h("tr", {}, h("td", { colspan: kolonlar.length + 2, style: "color:#4a5866;padding:12px" }, "Yükleniyor…")));
+      durum("Liste yükleniyor…");
       try { satirlar = await kaynak(); } catch (e) { bildir(e.message, true); }
       for (const id of [...isaretli]) if (!satirlar.some((s) => s.id === id)) isaretli.delete(id);
       secili = satirlar.find((s) => s.id === secili?.id) || null;
@@ -627,27 +629,138 @@ function depoFormAc(d = null) {
 const TASERON_SEKMELERI = [["paralar", "Verilen paralar"], ["kalemler", "Adına harcanan fatura kalemleri"], ["elden", "Elden harcamalar"],
   ["personel", "Personel ücret / SGK"]];
 
-const taseronDurumu = { cariId: null, sekme: "paralar", bordro: null };
+const taseronDurumu = { cariId: null, sekme: "paralar" };
+// Bordro Yükle: bordro Excel'i yüklenir, şantiye + deposu (taşeron) seçilir, tutar ve SGK maliyeti özetlenir; seçilen
+// personel taşeronun hesabına yazılır (aynı ay ikinci kez yüklenirse güncellenir)
+const bordroDurumu = { veri: null, secili: new Set(), santiye: "", depo: "", cari: "", donem: "", oran: null };
+function bordroYukleAc({ cariId = null } = {}) {
+  const b = bordroDurumu;
+  if (cariId) b.cari = String(cariId);
+  sekmeAc("bordro-yukle", "Bordro Yükle", {
+    async ciz(el) {
+      let santiyeler, depolar, cariler;
+      try { [santiyeler, depolar, cariler] = await Promise.all([api("/api/santiyeler"), api("/api/depolar"), api("/api/cariler")]); }
+      catch (e) { return bildir(e.message, true); }
+      if (b.oran == null) { try { b.oran = localStorage.getItem("sgk_orani"); } catch { /* yoksa varsayılan */ } b.oran = b.oran ?? "37.75"; }
+      const dosyaG = h("input", { type: "file", accept: ".xlsx,.xls", hidden: true, onchange: async (e) => {
+        const fd = new FormData(); fd.append("dosya", e.target.files[0]); const ad = e.target.files[0].name; e.target.value = "";
+        try {
+          b.veri = { ...(await api("/api/taseron-giderleri/bordro-onizle", { metod: "POST", dosya: fd })), dosya_adi: ad };
+          b.secili = new Set(b.veri.kisiler.map((_, i) => i));
+          if (b.veri.donem) b.donem = b.veri.donem;
+          yenidenCiz();
+        } catch (err) { bildir(err.message, true); }
+      } });
+      // Şantiye -> o şantiyenin depoları (taşeronlar) -> deponun carisi; depo seçilmezse şantiyenin kendisi
+      const santiyeS = h("select", { onchange: (e) => { b.santiye = e.target.value; b.depo = ""; yenidenCiz(); } },
+        secenekler(secimeUygun(santiyeler, Number(b.santiye)), "— Şantiye seçin —", b.santiye));
+      const uygunDepo = secimeUygun(depolar, Number(b.depo)).filter((d) => !b.santiye || String(d.santiye_id) === b.santiye);
+      const depoS = h("select", { onchange: (e) => {
+        b.depo = e.target.value;
+        const d = depolar.find((x) => String(x.id) === b.depo);
+        if (d?.cari_id) b.cari = String(d.cari_id);
+        yenidenCiz();
+      } }, secenekler(uygunDepo, "— Şantiyenin kendisi —", b.depo, (d) => (b.santiye ? d.ad : depoEtiketi(d))));
+      const depo = depolar.find((x) => String(x.id) === b.depo);
+      const cariS = h("select", { onchange: (e) => (b.cari = e.target.value) },
+        h("option", { value: "" }, "— Taşeron (cari) seçin —"),
+        cariler.map((c) => h("option", { value: c.id, selected: String(c.id) === b.cari }, c.unvan)));
+      const donemI = h("input", { type: "month", value: b.donem, onchange: (e) => (b.donem = e.target.value) });
+      const oranI = h("input", { type: "number", step: "any", value: b.oran, style: "width:70px", onchange: (e) => { b.oran = e.target.value; yenidenCiz(); } });
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Bordro Yükle"), dosyaG,
+          h("button", { class: "dugme ana", onclick: () => dosyaG.click() }, b.veri ? "Başka bordro yükle" : "Bordro Excel'ini seç"),
+          b.veri ? h("span", {}, b.veri.dosya_adi || "") : ""),
+        h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Şantiye:", santiyeS, "Depo (taşeron):", depoS,
+          "Taşeron:", depo?.cari_id ? h("b", {}, depo.cari_unvan) : cariS, "Ay:", donemI,
+          h("label", { title: "SGK masrafı = normal kazanç x bu oran" }, "SGK oranı %: ", oranI)));
+      aramaliSec(santiyeS, { bosYazi: "— Şantiye seçin —" });
+      if (!depo?.cari_id) cariAramali(cariS, cariler, { bosYazi: "— Taşeron (cari) seçin —" });
+      if (!b.veri) {
+        return el.append(ACIKLAMA("Bordro Excel'ini seçin (Adı Soyadı, TCKN, T.Gün, Nor.Kazanç, SSK İşçi, İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları). "
+          + "Şantiyeyi ve o şantiyedeki taşeron deposunu seçin; depo seçmezseniz şantiyenin kendisine yazılır. "
+          + "SGK maliyeti = normal kazanç x %37,75; taşerona net ödenen + vergi + SGK maliyeti borç yazılır."));
+      }
+      // Sunucudaki bordro_satiri ile aynı hesap
+      const oran = Number(b.oran) || 0;
+      for (const x of b.veri.kisiler) {
+        x.icra = x.brut != null && x.net != null ? Math.max(0, Math.round((x.brut - x.net - (x.sgk_isci || 0) - (x.vergi || 0)) * 100) / 100) : 0;
+        if (oran && x.brut != null && x.net != null) {
+          x.sgk = Math.round(x.brut * oran) / 100;
+          x.tutar = Math.round((x.net + (x.vergi || 0) + x.icra + x.sgk) * 100) / 100;
+        } else { x.sgk = x.sgk_isci; x.tutar = x.brut ?? (x.net || 0) + (x.sgk_isci || 0) + (x.vergi || 0); }
+      }
+      const secilen = b.veri.kisiler.filter((_, i) => b.secili.has(i));
+      const top = (a) => secilen.reduce((t, x) => t + (x[a] || 0), 0);
+      const kart = (ad, deger, ana) => h("div", { class: "ozet-kart", style: "min-width:150px" }, h("div", { style: "color:#4a5866;font-size:12px" }, ad),
+        h(ana ? "b" : "div", { style: "font-size:18px" }, para(deger)));
+      const kaydet = async () => {
+        if (!b.donem) return bildir("Bordro ayını seçin.", true);
+        if (!secilen.length) return bildir("Personel seçin.", true);
+        const cariIdSec = Number(depo?.cari_id || cariS.value) || null;
+        if (!cariIdSec) return bildir("Bordronun yazılacağı taşeronu (cari) seçin.", true);
+        try { localStorage.setItem("sgk_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
+        try {
+          if (depo && !depo.cari_id) {  // depo bu taşerona bağlanır; sonraki bordro ve fatura kalemleri de ona yazılır
+            await api(`/api/depolar/${depo.id}`, { metod: "PUT", veri: { ad: depo.ad, santiye_id: depo.santiye_id, cari_id: cariIdSec, aciklama: depo.aciklama, durum: depo.durum || "aktif" } });
+          }
+          const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: cariIdSec, donem: b.donem,
+            santiye_id: Number(b.santiye) || depo?.santiye_id || null, depo_id: depo ? depo.id : null, sgk_orani: Number(oranI.value) || 0, kisiler: secilen } });
+          bildir(`${r.eklenen} personel taşeronun hesabına yazıldı${r.guncellenen ? `, ${r.guncellenen} personel güncellendi` : ""}.`);
+          b.veri = null;
+          listeyiTazele("taseron");
+          yenidenCiz();
+        } catch (err) { bildir(err.message, true); }
+      };
+      const tumu = h("input", { type: "checkbox", checked: b.secili.size === b.veri.kisiler.length,
+        onchange: (e) => { b.veri.kisiler.forEach((_, i) => (e.target.checked ? b.secili.add(i) : b.secili.delete(i))); yenidenCiz(); } });
+      el.append(
+        h("div", { class: "kart-satiri", style: "margin:8px 0" },
+          kart(`Normal kazanç (${secilen.length}/${b.veri.kisiler.length} personel)`, top("brut")),
+          kart("Net ödenen", top("net")), kart("Vergiler (gelir + damga)", top("vergi")),
+          top("icra") ? kart("İcra kesintisi", top("icra")) : "",
+          kart(`SGK maliyeti (%${String(b.oran).replace(".", ",")})`, top("sgk")),
+          kart("Genel toplam (taşerona yazılacak)", top("tutar"), true)),
+        h("div", { class: "liste-ust" }, h("button", { class: "dugme ana", onclick: kaydet }, `Seçilenleri kaydet (${secilen.length})`),
+          h("button", { class: "dugme", onclick: () => { b.veri = null; yenidenCiz(); } }, "Vazgeç")),
+        h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Personel", "TC", "Gün", "Normal kazanç", "Net ödenen", "Vergi", "İcra", "SGK maliyeti", "Taşerona yazılacak"]
+            .map((x, i) => h("th", { class: i > 2 ? "sayi" : "" }, x)))),
+          h("tbody", {}, b.veri.kisiler.map((x, i) => h("tr", {},
+            h("td", {}, h("input", { type: "checkbox", checked: b.secili.has(i), onchange: (e) => { e.target.checked ? b.secili.add(i) : b.secili.delete(i); yenidenCiz(); } })),
+            h("td", {}, x.personel), h("td", {}, x.tckn || ""), h("td", { class: "sayi" }, x.gun ?? ""),
+            ...["brut", "net", "vergi", "icra", "sgk", "tutar"].map((a) => h("td", { class: "sayi" }, para(x[a])))))),
+          h("tfoot", {}, h("tr", {}, h("td", { colspan: 4 }, "Seçilenlerin toplamı"),
+            ...["brut", "net", "vergi", "icra", "sgk", "tutar"].map((a) => h("td", { class: "sayi" }, para(top(a)))))))));
+      durum(`${secilen.length} personel seçili, toplam ${para(top("tutar"))} TL`);
+    },
+    yenile: () => yenidenCiz(),
+  });
+}
+
 function taseronAc(cariId = null) {
   const durumu = taseronDurumu;
-  if (cariId != null && cariId !== durumu.cariId) Object.assign(durumu, { cariId, sekme: "paralar", bordro: null });
+  if (cariId != null && cariId !== durumu.cariId) Object.assign(durumu, { cariId, sekme: "paralar" });
   sekmeAc("taseron", "Taşeron Hesabı", {
     async ciz(el) {
       let cariler, taseronlar, santiyeler, depolar;
       try {
         [cariler, taseronlar, santiyeler, depolar] = await Promise.all([api("/api/cariler"), api("/api/taseronlar"), api("/api/santiyeler"), api("/api/depolar")]);
       } catch (e) { return bildir(e.message, true); }
-      const taseronIdleri = new Set(taseronlar.map((t) => t.id));
-      const secS = h("select", { onchange: (e) => { durumu.cariId = Number(e.target.value) || null; durumu.bordro = null; yenidenCiz(); } },
+      // Yalnız taşeronlar: aktif bir depoya bağlı ya da adına gider yazılmış cariler (bütün cariler burada kalabalık yapmasın)
+      if (durumu.cariId && !taseronlar.some((t) => t.id === durumu.cariId)) {
+        const c = cariler.find((x) => x.id === durumu.cariId);
+        if (c) taseronlar.push({ id: c.id, unvan: c.unvan });
+      }
+      const secS = h("select", { onchange: (e) => { durumu.cariId = Number(e.target.value) || null; yenidenCiz(); } },
         h("option", { value: "" }, "— Taşeron seçin —"),
-        taseronlar.length ? h("optgroup", { label: "Taşeronlar" }, taseronlar.map((t) => h("option", { value: t.id, selected: t.id === durumu.cariId }, t.unvan))) : null,
-        h("optgroup", { label: "Bütün cariler" }, cariler.filter((c) => !taseronIdleri.has(c.id))
-          .map((c) => h("option", { value: c.id, selected: c.id === durumu.cariId }, c.unvan))));
-      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Taşeron Hesabı"), secS));
+        taseronlar.map((t) => h("option", { value: t.id, selected: t.id === durumu.cariId }, t.unvan)));
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "Taşeron Hesabı"), secS,
+        h("button", { class: "dugme", onclick: () => bordroYukleAc({ cariId: durumu.cariId }) }, "Bordro Yükle")));
       aramaliSec(secS, { bosYazi: "— Taşeron seçin —" });
       if (!durumu.cariId) {
         return el.append(ACIKLAMA("Taşeronu seçin. Taşerona verdiğiniz paralar, depo üzerinden onun adına harcanan fatura kalemleri, "
-          + "elden harcamalar ve personeline ödenen ücret/SGK ayrı sekmelerde görünür; hepsi taşeronun cari hesabına işlenir."));
+          + "elden harcamalar ve personeline ödenen ücret/SGK ayrı sekmelerde görünür; hepsi taşeronun cari hesabına işlenir. "
+          + "Listede yalnız taşeronlar var; bir firma burada yoksa Şantiye > Depolar'da deposuna o cariyi bağlayın ya da Bordro Yükle'de seçin."));
       }
       let v;
       try { v = await api(`/api/taseron/${durumu.cariId}`); } catch (e) { return bildir(e.message, true); }
@@ -703,63 +816,9 @@ function taseronAc(cariId = null) {
           raporTablosu([["tarih", "Tarih", "tarih"], ["aciklama", "Açıklama"], ["santiye_ad", "Şantiye"], [(g) => (g.hareket_id ? "Kasadan" : ""), "Ödeme"],
             ["tutar", "Tutar", "para"], silKolonu], v.elden, { toplam: ["tutar"] }));
       } else {
-        // Bordro Excel'i: önizlenir, seçilen satırlar kaydedilir (aynı ay ikinci kez yüklenirse güncellenir)
-        const dosyaG = h("input", { type: "file", accept: ".xlsx,.xls", hidden: true, onchange: async (e) => {
-          const fd = new FormData(); fd.append("dosya", e.target.files[0]); e.target.value = "";
-          try {
-            const r = await api("/api/taseron-giderleri/bordro-onizle", { metod: "POST", dosya: fd });
-            durumu.bordro = { ...r, secili: new Set(r.kisiler.map((_, i) => i)) };
-            yenidenCiz();
-          } catch (err) { bildir(err.message, true); }
-        } });
-        el.append(ACIKLAMA("Taşeronun personeline ödenen ücret ve SGK. Bordro Excel'ini yükleyin (Adı Soyadı, TCKN, T.Gün, Nor.Kazanç, SSK İşçi, "
-          + "İşs.P.İşçi, Kalan GV, Damga V, N.Ödenen sütunları). SGK masrafı = normal kazanç x %37,75; taşerona net ödenen + vergi + SGK masrafı borç yazılır."),
-          h("div", { class: "liste-ust" }, dosyaG, h("button", { class: "dugme ana", onclick: () => dosyaG.click() }, "Bordro Excel'i yükle")));
-        const b = durumu.bordro;
-        if (b) {
-          const donemI = h("input", { type: "month", value: b.donem || "" });
-          if (b.oran == null) { try { b.oran = localStorage.getItem("sgk_orani"); } catch { /* yoksa varsayılan */ } b.oran = b.oran ?? "37.75"; }
-          const oranI = h("input", { type: "number", step: "any", value: b.oran, style: "width:70px", onchange: (e) => { b.oran = e.target.value; yenidenCiz(); } });
-          // SGK masrafı = normal kazanç x oran; taşerona net + vergi + icra + SGK masrafı (sunucudaki bordro_satiri ile aynı)
-          const oran = Number(b.oran) || 0;
-          for (const x of b.kisiler) {
-            if (oran && x.brut != null && x.net != null) {
-              const icra = Math.max(0, x.brut - x.net - (x.sgk_isci || 0) - (x.vergi || 0));
-              x.sgk = Math.round(x.brut * oran) / 100;
-              x.tutar = Math.round((x.net + (x.vergi || 0) + icra + x.sgk) * 100) / 100;
-            } else { x.sgk = x.sgk_isci; x.tutar = x.brut ?? (x.net || 0) + (x.sgk_isci || 0) + (x.vergi || 0); }
-          }
-          const sS = santiyeSec();
-          const tumu = h("input", { type: "checkbox", checked: b.secili.size === b.kisiler.length,
-            onchange: (e) => { b.kisiler.forEach((_, i) => (e.target.checked ? b.secili.add(i) : b.secili.delete(i))); yenidenCiz(); } });
-          const kaydet = async () => {
-            if (!donemI.value) return bildir("Bordro ayını seçin.", true);
-            const kisiler = b.kisiler.filter((_, i) => b.secili.has(i));
-            if (!kisiler.length) return bildir("Personel seçin.", true);
-            try { localStorage.setItem("sgk_orani", oranI.value); } catch { /* tarayıcı izin vermezse hatırlanmaz */ }
-            try {
-              const r = await api("/api/taseron-giderleri/bordro", { metod: "POST", veri: { cari_id: v.cari.id, donem: donemI.value,
-                santiye_id: Number(sS.value) || null, sgk_orani: Number(oranI.value) || 0, kisiler } });
-              bildir(`${r.eklenen} personel eklendi${r.guncellenen ? `, ${r.guncellenen} personel güncellendi` : ""}.`);
-              durumu.bordro = null; yenidenCiz();
-            } catch (err) { bildir(err.message, true); }
-          };
-          const secilen = b.kisiler.filter((_, i) => b.secili.has(i));
-          el.append(h("fieldset", {}, h("legend", {}, `Bordro önizleme (${b.kisiler.length} personel). Taşerona ait olanları seçin`),
-            h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, "Ay:", donemI, "Şantiye:", sS,
-              h("label", { title: "SGK masrafı = normal kazanç x bu oran" }, "SGK oranı %: ", oranI),
-              h("button", { class: "dugme ana", onclick: kaydet }, `Seçilenleri kaydet (${secilen.length})`),
-              h("button", { class: "dugme", onclick: () => { durumu.bordro = null; yenidenCiz(); } }, "Vazgeç")),
-            h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
-              h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Personel", "TC", "Gün", "Normal kazanç", "Net ödenen", "SGK masrafı", "Vergi", "Taşerona yazılacak"]
-                .map((x, i) => h("th", { class: i > 2 ? "sayi" : "" }, x)))),
-              h("tbody", {}, b.kisiler.map((x, i) => h("tr", {},
-                h("td", {}, h("input", { type: "checkbox", checked: b.secili.has(i), onchange: (e) => { e.target.checked ? b.secili.add(i) : b.secili.delete(i); yenidenCiz(); } })),
-                h("td", {}, x.personel), h("td", {}, x.tckn || ""), h("td", { class: "sayi" }, x.gun ?? ""),
-                ...["brut", "net", "sgk", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(x[a])))))),
-              h("tfoot", {}, h("tr", {}, h("td", { colspan: 4 }, "Seçilenlerin toplamı"),
-                ...["brut", "net", "sgk", "vergi", "tutar"].map((a) => h("td", { class: "sayi" }, para(secilen.reduce((t, x) => t + (x[a] || 0), 0))))))))));
-        }
+        el.append(ACIKLAMA("Taşeronun personeline ödenen ücret ve SGK; taşerona net ödenen + vergi + SGK masrafı borç yazılır. "
+          + "Bordro Excel'i ayrı ekrandan yüklenir: Cari > Bordro Yükle."),
+          h("div", { class: "liste-ust" }, h("button", { class: "dugme ana", onclick: () => bordroYukleAc({ cariId: v.cari.id }) }, "Bordro Yükle")));
         const elle = h("form", { class: "liste-ust", style: "flex-wrap:wrap", onsubmit: async (e) => {
           e.preventDefault();
           const f = e.target.elements, ay = f.donem.value, [y, a] = ay.split("-").map(Number);
@@ -1212,7 +1271,7 @@ function faturaListesiAc(yon, ilkSuzgec = "") {
   const depoS = depoSecimi();
   sekmeAc(`faturalar-${yon}`, ad, listeEkrani({
     baslik: ad,
-    kaynak: () => api(`/api/faturalar?yon=${yon}${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
+    kaynak: () => api(`/api/faturalar?yon=${yon}&ozet=1${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
     ustAlan: (yenile) => h("span", { style: "display:flex;gap:6px" },
       h("select", { onchange: (e) => { durumFiltre = e.target.value; yenile(); } },
         [["", "Tüm faturalar"], ["kayitli", "Wolvox aktarımı hariç"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"],
@@ -1223,7 +1282,9 @@ function faturaListesiAc(yon, ilkSuzgec = "") {
           if (!taslaklar.length) return bildir("Onay bekleyen fatura yok.");
           if (!confirm(`Onay bekleyen ${taslaklar.length} faturanın hepsi kontrol edilmeden onaylansın mı?`)) return;
           const r = await api("/api/faturalar/toplu-onayla", { metod: "POST", veri: { idler: taslaklar.map((f) => f.id) } });
-          bildir(`${r.onaylanan} fatura onaylandı${r.hatalar.length ? `, ${r.hatalar.length} fatura onaylanamadı: ${r.hatalar[0]}` : ""}.`, !!r.hatalar.length);
+          bildir(`${r.onaylanan} fatura onaylandı${r.hatalar.length ? `, ${r.hatalar.length} fatura onaylanamadı` : ""}.`, !!r.hatalar.length);
+          if (r.hatalar.length) alert(`Onaylanamayanlar (listede "Onay bekleyenler" seçince görünür):\n\n${r.hatalar.slice(0, 15).join("\n")}`
+            + (r.hatalar.length > 15 ? `\n… ve ${r.hatalar.length - 15} fatura daha` : ""));
           yenile();
           if (r.onaylanan) benzerMalzemeKontrol();
         } catch (e) { bildir(e.message, true); }
@@ -1231,8 +1292,8 @@ function faturaListesiAc(yon, ilkSuzgec = "") {
     kolonlar: [
       { alan: "durum", baslik: "Durum", deger: (f) => h("span", { class: `etiket ${f.durum}` }, DURUM_ADI[f.durum] || f.durum), metin: (f) => DURUM_ADI[f.durum] || f.durum },
       { alan: "tarih", baslik: "Tarih", tip: "tarih" }, { alan: "fatura_no", baslik: "Fatura No" },
-      { alan: "cari_unvan", baslik: "Cari", metin: (f) => f.cari_unvan || f.ai_okuma?.[yon === "gelen" ? "satici" : "alici"]?.unvan || "" ,
-        deger: (f) => f.cari_unvan || (f.ai_okuma ? `${f.durum === "aktarim" ? "" : "(yeni) "}${f.ai_okuma[yon === "gelen" ? "satici" : "alici"]?.unvan || ""}` : "") },
+      { alan: "cari_unvan", baslik: "Cari", metin: (f) => f.cari_unvan || f.karsi_unvan || "",
+        deger: (f) => f.cari_unvan || (f.karsi_unvan ? `${f.durum === "aktarim" ? "" : "(yeni) "}${f.karsi_unvan}` : "") },
       { alan: "santiye_ad", baslik: "Şantiye" }, { alan: "gider_turu", baslik: "Gider Türü" },
       { alan: "ara_toplam", baslik: "Ara Toplam", tip: "para" }, { alan: "kdv_toplam", baslik: "KDV", tip: "para" },
       { alan: "genel_toplam", baslik: "Genel Toplam", tip: "para" },
@@ -2084,7 +2145,7 @@ function aiOkumaAc() {
         liste.replaceChildren(
           yuklemeler.length > 1 ? h("div", { class: "yukleme-ozet" },
             h("b", {}, `${yuklemeler.length} dosya: ${biten} bitti${bekleyen ? `, ${bekleyen} okunuyor` : ""}${hatali.length ? `, ${hatali.length} okunamadı` : ""}`
-              + ` · ${yeni} yeni fatura eklendi${zaten ? `, ${zaten} dosya zaten kayıtlıydı (atlandı)` : ""}${wolvoxta ? ` (${wolvoxta} fatura Wolvox aktarımında vardı)` : ""}${yarim ? `, ${yarim} dosya yarıda kaldı` : ""}`),
+              + ` · ${yeni} yeni fatura eklendi${zaten ? `, ${zaten} dosya zaten kayıtlıydı (atlandı)` : ""}${wolvoxta ? ` (${wolvoxta} tanesi Wolvox kaydının yerine geçti, şantiyesi alındı)` : ""}${yarim ? `, ${yarim} dosya yarıda kaldı` : ""}`),
             yuklemeler.length > 10 ? h("button", { class: "dugme", onclick: () => { OKUMA.ayrinti = !OKUMA.ayrinti; cizYuklemeler(); } }, ayrinti ? "Ayrıntıyı gizle" : "Tüm dosyaları göster") : null,
             !bekleyen ? h("button", { class: "dugme", title: "Yalnız bu dosya listesini boşaltır; faturalar etkilenmez", onclick: () => {
               yuklemeler.length = 0; okumaDurumunuSakla(true); cizYuklemeler(); } }, "Dosya listesini temizle") : null) : null,
@@ -2128,12 +2189,12 @@ function aiOkumaAc() {
               const varolan = faturalar.filter((f) => f.zaten_var).length;
               const guncellenen = faturalar.filter((f) => !f.zaten_var && f.ai_okuma?.bilgi?.some((x) => x.includes("XML'iyle güncellendi"))).length;
               const digerYon = faturalar.filter((f) => f.yon !== yon).length;
-              const wolvoxta = faturalar.filter((f) => f.zaten_var && f.durum === "aktarim").length;
+              const wolvoxta = faturalar.filter((f) => !f.zaten_var && f.ai_okuma?.bilgi?.some((x) => /Wolvox kayd/.test(x))).length;
               y.wolvox = wolvoxta;
-              y.durum = wolvoxta === faturalar.length ? "Bu fatura Wolvox aktarımında zaten var, yüklenmedi"
-                : varolan === faturalar.length ? "Bu fatura zaten eklenmiş, atlandı"
+              y.durum = varolan === faturalar.length ? "Bu fatura zaten eklenmiş, atlandı"
                 : `${faturalar.length > 1 ? faturalar.length + " fatura okundu" : "Okundu"}${varolan ? `, ${varolan} zaten vardı` : ""}`
                   + `${guncellenen ? `, ${guncellenen} PDF taslağı XML ile düzeltildi` : ""}${u ? `, ${u} uyarı` : ""}`
+                  + `${wolvoxta ? `, ${wolvoxta} fatura Wolvox kaydının yerine geçti (şantiyesi alındı)` : ""}`
                   + `${digerYon ? `, ${digerYon} fatura ${yon === "gelen" ? "satış" : "alış"} faturalarına eklendi` : ""}`;
               y.yeni = faturalar.length - varolan;
               y.zaten = varolan === faturalar.length;
@@ -4739,7 +4800,10 @@ function wolvoxAktarAc() {
             } }, "Onunla birleştir")) : ""));
       };
       el.append(h("h3", {}, `${o.dosya}: ${o.fatura_sayisi} fatura (${tarih(o.ilk_tarih)} – ${tarih(o.son_tarih)})`),
-        h("p", {}, `${o.aktarilacak} fatura aktarılacak`, o.zaten_var ? `, ${o.zaten_var} fatura sistemde zaten var (atlanacak)` : "",
+        h("p", {}, `${o.aktarilacak} fatura aktarılacak`,
+          o.santiye_islenecek ? `, programda olan ${o.santiye_islenecek} faturanın şantiyesi boş kalemlerine Wolvox grubu yazılacak` : "",
+          o.santiyesi_dolu ? `, ${o.santiyesi_dolu} faturanın şantiyesi zaten yazılı (dokunulmayacak)` : "",
+          o.zaten_var ? `, ${o.zaten_var} fatura önceki Wolvox aktarımında var (atlanacak)` : "",
           `. ${o.kalem_sayisi} kalem, ${o.firma_sayisi} firma, ${o.stok_adi_sayisi} farklı stok adı`, o.iade_sayisi ? `, ${o.iade_sayisi} iade faturası` : "", "."),
         o.atlanan_satir_sayisi ? h("p", { class: "negatif" }, `${o.atlanan_satir_sayisi} satır okunamadı: `,
           o.atlanan_satir.slice(0, 5).map((x) => `${x.satir}. satır (${x.neden})`).join(", ")) : "",
@@ -4752,7 +4816,8 @@ function wolvoxAktarAc() {
         h("p", {}, h("button", { class: "dugme ana", onclick: async (e) => {
           const eksik = o.gruplar.find((g) => kararlar[g.grup].tur !== "yok" && !kararlar[g.grup].ad.trim());
           if (eksik) return bildir(`'${eksik.grup || "(grupsuz)"}' grubunun adı boş.`, true);
-          if (!confirm(`${o.aktarilacak} fatura aktarılsın mı? Önce yedek alınır; istediğiniz zaman "Geri al" ile silebilirsiniz.`)) return;
+          if (!confirm(`${o.aktarilacak} fatura aktarılsın${o.santiye_islenecek ? `, ${o.santiye_islenecek} faturaya şantiye yazılsın` : ""} mı? `
+            + "Önce yedek alınır; istediğiniz zaman \"Geri al\" ile geri alabilirsiniz.")) return;
           e.target.disabled = true;
           try {
             durum("Yedek alınıyor ve faturalar aktarılıyor (birkaç dakika sürebilir)…");
@@ -4760,14 +4825,15 @@ function wolvoxAktarAc() {
             const r = await api("/api/wolvox/aktar", { metod: "POST", dosya: fd });
             onizleme = null;
             durum("Hazır");
-            bildir(`${r.fatura_sayisi} fatura aktarıldı${r.atlanan ? `, ${r.atlanan} fatura zaten vardı` : ""}. ${r.acilan_santiye} şantiye, ${r.acilan_depo} depo açıldı.`);
+            bildir(`${r.fatura_sayisi} fatura aktarıldı${r.santiye_islenen ? `, ${r.santiye_islenen} faturaya şantiye yazıldı` : ""}`
+              + `${r.atlanan ? `, ${r.atlanan} fatura atlandı` : ""}. ${r.acilan_santiye} şantiye, ${r.acilan_depo} depo açıldı.`);
             for (const a of ["santiye-ozet", "santiye-faturalari", "rapor-malzeme-gelen", "malzeme-kartlari"]) listeyiTazele(a);
             yenidenCiz();
             if (r.benzer_malzeme && await secimSor("Benzer stok adları",
               `Yazılışı aynı olan stok adları (ör. "3x25 NYA" ve "3x25 nya-") kendiliğinden birleştirildi. ${r.benzer_malzeme} stok adı bir başka malzemeye benziyor; birleştirilsin mi diye listede sorulur.`,
               [[true, "Listeyi aç", true], [false, "Sonra"]])) malzemeEslestirmeAc();
           } catch (err) { durum("Hazır"); bildir(err.message, true); e.target.disabled = false; }
-        } }, `${o.aktarilacak} faturayı aktar`)));
+        } }, o.santiye_islenecek ? `${o.aktarilacak} faturayı aktar, ${o.santiye_islenecek} faturaya şantiye yaz` : `${o.aktarilacak} faturayı aktar`)));
     },
     yenile: () => yenidenCiz(),
   });
@@ -4780,7 +4846,7 @@ const MODULLER = [
   ["Malzeme", [["Ana Depo", anaDepoAc], ["Malzeme Bazlı Alışlar", () => malzemeRaporuAc("gelen")], ["Malzeme Bazlı Satışlar", () => malzemeRaporuAc("giden")],
     ["Benzer Malzemeleri Eşleştir", malzemeEslestirmeAc], ["Malzeme Kartları", malzemeListesiAc]]],
   ["Günlük Takip", [["Hızlı Arama (F3)", () => hizliAramaAc()], ["Ödeme Takvimi / Nakit Akışı", odemeTakvimiAc], ["Düzenli Ödemeler", duzenliOdemelerAc]]],
-  ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Taşeron Hesabı", () => taseronAc()], ["Mutabakat", mutabakatAc]]],
+  ["Cari", [["Cari Listesi", cariListesiAc], ["Yeni Cari", () => cariFormAc()], ["Cari Bakiye Raporu", cariBakiyeAc], ["Taşeron Hesabı", () => taseronAc()], ["Bordro Yükle", () => bordroYukleAc()], ["Mutabakat", mutabakatAc]]],
   ["Şantiye", [["Şantiyeler", santiyeListesiAc], ["Depolar (taşeronlar)", depoListesiAc], ["Şantiye Bazlı Faturalar", santiyeFaturalariAc], ["Depo Bazlı Harcamalar", depoRaporuAc],
     ["Şantiye Maliyet Raporu", santiyeOzetAc]]],
   ["Çek / Senet", [["Alınan Çekler", () => cekListesiAc("alinan")], ["Verilen Çekler", () => cekListesiAc("verilen")], ["Toplu Çek Girişi", () => topluCekAc("alinan")], ["Vade Takvimi", vadeTakvimiAc],

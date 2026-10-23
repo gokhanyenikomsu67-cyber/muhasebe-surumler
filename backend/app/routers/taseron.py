@@ -12,7 +12,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import kural, schemas
@@ -425,8 +425,9 @@ def taseron_sayfasi(cari_id: int, db: Session = Depends(get_db), k: Kullanici = 
 
 @router.get("/taseronlar")
 def taseronlar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    """Depoya bağlı ya da taşeron gideri olan cariler (taşeron sayfası seçimi için)."""
-    idler = set(db.scalars(select(Depo.cari_id).where(Depo.sirket_id == k.sirket_id, Depo.cari_id.is_not(None)))) | \
+    """Aktif bir depoya bağlı ya da taşeron gideri olan cariler (taşeron sayfası seçimi için)."""
+    idler = set(db.scalars(select(Depo.cari_id).where(Depo.sirket_id == k.sirket_id, Depo.cari_id.is_not(None),
+                                                      or_(Depo.durum.is_(None), Depo.durum != "pasif")))) | \
         set(db.scalars(select(TaseronGider.cari_id).where(TaseronGider.sirket_id == k.sirket_id)))
     return [{"id": c.id, "unvan": c.unvan} for c in sorted(db.scalars(select(Cari).where(Cari.id.in_(idler))),
                                                                   key=lambda _x: kural.tr_sira(_x.unvan))]

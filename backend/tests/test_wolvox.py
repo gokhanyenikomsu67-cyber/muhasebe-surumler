@@ -81,19 +81,53 @@ def test_wolvox_aktarimi(monkeypatch):
     r2 = client.post("/api/wolvox/aktar", files={"dosya": ("w.xlsx", dosya)}, headers=h).json()
     assert (r2["fatura_sayisi"], r2["atlanan"]) == (0, 4)
 
-    # Aynı faturanın PDF'i yüklenince ikinci kez kaydedilmez, cari açılmaz, "zaten var" döner
+    # Aynı faturanın PDF'i yüklenince asıl kayıt olur: Wolvox kaydının yerine geçer, şantiyesini alır (iki kez sayılmaz)
     monkeypatch.setattr(ai, "fatura_oku", lambda *a, **kw: {**OKUNAN, "fatura_no": "XYZ2025000000077", "tarih": "2025-03-01",
                                                             "genel_toplam": 12000})
     f = client.post("/api/faturalar/oku?yontem=ai", files={"dosya": ("f.pdf", b"%PDF-1.4 w", "application/pdf")}, headers=h).json()[0]
-    assert f["zaten_var"] is True and f["durum"] == "aktarim"
-    assert client.get("/api/cariler", headers=h).json() == []
+    assert f["zaten_var"] is False and f["durum"] == "taslak"
+    assert {kl["santiye_id"] for kl in f["kalemler"]} == {next(s["id"] for s in client.get("/api/santiyeler", headers=h).json() if s["ad"] == "Deneme Şantiye")}
+    assert any("Wolvox kaydının yerine geçti" in x for x in f["ai_okuma"]["bilgi"])
+    assert len(client.get("/api/faturalar?durum=aktarim", headers=h).json()) == 3
 
-    # Geri alma: faturalar ve açılan şantiye/depo silinir
+    # Geri alma: faturalar ve açılan, kullanılmayan şantiye/depo silinir (PDF'ten gelen faturanın şantiyesi kalır)
     gecmis = client.get("/api/wolvox/aktarimlar", headers=h).json()
     for a in gecmis:
         client.delete(f"/api/wolvox/aktarimlar/{a['id']}", headers=h)
     assert client.get("/api/faturalar?durum=aktarim", headers=h).json() == []
-    assert client.get("/api/santiyeler", headers=h).json() == [] and client.get("/api/depolar", headers=h).json() == []
+    assert [s["ad"] for s in client.get("/api/santiyeler", headers=h).json()] == ["Deneme Şantiye"]
+    assert client.get("/api/depolar", headers=h).json() == []
+
+
+def test_belgeden_girilen_faturaya_wolvox_santiyesi(monkeypatch):
+    """Önce belgeden girilen faturalar, sonra Wolvox Excel'i: var olan faturanın şantiyesi boş kalemlerine grup yazılır."""
+    h = yeni_kullanici(f"{uuid.uuid4().hex}@ornek.com")
+    monkeypatch.setattr(ai, "fatura_oku", lambda *a, **kw: {**OKUNAN, "fatura_no": "DNM2025000000001", "tarih": "2025-01-05",
+                                                            "satici": {**OKUNAN["satici"], "unvan": "Örnek Elektrik Ltd."},
+                                                            "onerilen_santiye": None,
+                                                            "kalemler": [{"aciklama": "3x25 NYA KABLO", "miktar": 100, "birim": "m",
+                                                                          "birim_fiyat": 10, "kdv_orani": 20, "tutar": 1000},
+                                                                         {"aciklama": "3x25 nya kablo-", "miktar": 50, "birim": "m",
+                                                                          "birim_fiyat": 10, "kdv_orani": 20, "tutar": 500}],
+                                                            "ara_toplam": 1500, "kdv_toplam": 300, "genel_toplam": 1800})
+    f = client.post("/api/faturalar/oku?yontem=ai", files={"dosya": ("f.pdf", b"%PDF-1.4 d", "application/pdf")}, headers=h).json()[0]
+    assert client.post(f"/api/faturalar/{f['id']}/onayla", headers=h).status_code == 200
+    dosya = _excel()
+    o = client.post("/api/wolvox/onizle", files={"dosya": ("w.xlsx", dosya)}, headers=h).json()
+    assert (o["aktarilacak"], o["santiye_islenecek"]) == (3, 1)
+    r = client.post("/api/wolvox/aktar", files={"dosya": ("w.xlsx", dosya)}, headers=h).json()
+    assert (r["fatura_sayisi"], r["santiye_islenen"]) == (3, 1)
+    kl = client.get(f"/api/faturalar/{f['id']}", headers=h).json()["kalemler"]
+    santiye = next(s for s in client.get("/api/santiyeler", headers=h).json() if s["ad"].replace("SANTİYE", "ŞANTİYE") == "DENEME ŞANTİYE")
+    depo = client.get("/api/depolar", headers=h).json()[0]
+    assert [(k["santiye_id"], k["depo_id"]) for k in kl] == [(santiye["id"], None), (santiye["id"], depo["id"])]
+    assert client.get(f"/api/faturalar/{f['id']}", headers=h).json()["durum"] == "onayli"
+    # İkinci yükleme dolu şantiyeye dokunmaz; geri alınca yazılan şantiyeler kalkar
+    o2 = client.post("/api/wolvox/onizle", files={"dosya": ("w.xlsx", dosya)}, headers=h).json()
+    assert (o2["aktarilacak"], o2["zaten_var"], o2["santiyesi_dolu"]) == (0, 3, 1)
+    client.delete(f"/api/wolvox/aktarimlar/{r['id']}", headers=h)
+    kl = client.get(f"/api/faturalar/{f['id']}", headers=h).json()["kalemler"]
+    assert [(k["santiye_id"], k["depo_id"]) for k in kl] == [(None, None), (None, None)]
 
 
 def test_santiye_birlestirme_ve_depoya_cevirme():
