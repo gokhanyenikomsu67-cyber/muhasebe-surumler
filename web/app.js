@@ -1274,17 +1274,22 @@ function malzemeListesiAc() {
 function faturaListesiAc(yon, ilkSuzgec = "") {
   const ad = yon === "gelen" ? "Alış Faturaları" : "Satış Faturaları";
   let durumFiltre = ilkSuzgec;
+  let santiyesizler = false;
   // Toplu atama (onaylı faturalar da): şantiye (yazınca yoksa açılır) ve gider türü
   const santiyeK = santiyeSecici();
   const giderS = h("select", {}, [["", "— Gider türü seçin —"], ...BEN.gider_turleri.map((g) => [g, g])].map(([d, m]) => h("option", { value: d }, m)));
   const depoS = depoSecimi();
   sekmeAc(`faturalar-${yon}`, ad, listeEkrani({
     baslik: ad,
-    kaynak: () => api(`/api/faturalar?yon=${yon}&ozet=1${durumFiltre ? `&durum=${durumFiltre}` : ""}`),
-    ustAlan: (yenile) => h("span", { style: "display:flex;gap:6px" },
+    kaynak: async () => (await api(`/api/faturalar?yon=${yon}&ozet=1${durumFiltre ? `&durum=${durumFiltre}` : ""}`))
+      .filter((f) => !santiyesizler || f.santiyesiz),
+    ustAlan: (yenile) => h("span", { style: "display:flex;gap:6px;align-items:center" },
       h("select", { onchange: (e) => { durumFiltre = e.target.value; yenile(); } },
         [["", "Tüm faturalar"], ["kayitli", "Wolvox aktarımı hariç"], ["taslak", "Onay bekleyenler"], ["onayli", "Onaylılar"], ["iptal", "İptal edilenler"],
           ["aktarim", "Wolvox'tan aktarılanlar"]].map(([d, m]) => h("option", { value: d, selected: d === durumFiltre }, m))),
+      // Şantiyesi (ya da bir kaleminin şantiyesi) boş olanlar: seçip "Seçilenlere ata" ile şantiyesi eklenir
+      h("label", { style: "font-size:13px;white-space:nowrap" }, h("input", { type: "checkbox", checked: santiyesizler,
+        onchange: (e) => { santiyesizler = e.target.checked; yenile(); } }), " Şantiyesi olmayanlar"),
       h("button", { class: "dugme", onclick: async () => {
         try {
           const taslaklar = await api(`/api/faturalar?yon=${yon}&durum=taslak`);

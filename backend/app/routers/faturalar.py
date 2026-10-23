@@ -144,7 +144,8 @@ def _ozet_satirlari(db: Session, k: Kullanici, faturalar: list[Fatura]) -> list[
             "cari_unvan": f.cari.unvan if f.cari else None, "karsi_unvan": karsi.get("unvan") if isinstance(karsi, dict) else None,
             "santiye_ad": ", ".join(adlar[i] for i in dict.fromkeys(sidler) if i in adlar) or None,
             "gider_turu": f.gider_turu, "ara_toplam": f.ara_toplam, "kdv_toplam": f.kdv_toplam, "genel_toplam": f.genel_toplam,
-            "para_birimi": f.para_birimi, "kalem_sayisi": len(kalem_santiyeleri.get(f.id, []))})
+            "para_birimi": f.para_birimi, "kalem_sayisi": len(kalem_santiyeleri.get(f.id, [])),
+            "santiyesiz": any(sid is None for sid in sidler)})  # faturanın ya da bir kaleminin şantiyesi yok
     return sonuc
 
 

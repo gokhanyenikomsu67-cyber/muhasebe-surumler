@@ -46,3 +46,15 @@ def test_depo_adi_degisince_taseron_borcu_ayni_depoda():
     assert [(x["depo"], x["kalem"]) for x in rapor] == [("Taşeron Yeni Ad", "Kum")]
     assert client.get(f"/api/raporlar/cari-ekstre/{taseron['id']}", headers=h).json()["bakiye"] == 120
     assert client.post("/api/depolar", json={"ad": "depo bir", "santiye_id": s["id"]}, headers=h).json()["id"] == d["id"]
+
+
+def test_ozet_listesi_santiyesi_olmayanlari_isaretler():
+    h = yeni_kullanici(f"{uuid.uuid4().hex}@ornek.com")
+    s = client.post("/api/santiyeler", json={"ad": "Deneme"}, headers=h).json()
+    c = client.post("/api/cariler", json={"unvan": "Örnek Market", "vkn": "1111111111"}, headers=h).json()
+    kalem = {"aciklama": "Kum", "miktar": 1, "birim_fiyat": 100, "kdv_orani": 20}
+    for no, sid in (("SZ1", s["id"]), ("SZ2", None)):
+        client.post("/api/faturalar", json={"yon": "gelen", "fatura_no": no, "tarih": "2026-09-10", "cari_id": c["id"],
+                                            "santiye_id": sid, "kalemler": [kalem]}, headers=h)
+    ozet = {f["fatura_no"]: f["santiyesiz"] for f in client.get("/api/faturalar?yon=gelen&ozet=1", headers=h).json()}
+    assert ozet == {"SZ1": False, "SZ2": True}
