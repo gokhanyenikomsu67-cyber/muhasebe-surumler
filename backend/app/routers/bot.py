@@ -97,7 +97,7 @@ def sor(metin: str, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_
 
 def _durum() -> dict:
     return {**bot.DURUM, "acik": bool(bot.ayarlar().get("acik")), "calisiyor": bot.calisiyor_mu(),
-            "kurulu": bot.kurulu_mu(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "taninmayanlar": bot.TANINMAYANLAR}
+            "kurulu": bot.kurulu_mu(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "mesajlar": bot.MESAJLAR}
 
 
 @router.get("/durum")
@@ -168,7 +168,7 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     kayit = db.scalars(select(BotNumarasi).where(BotNumarasi.aktif.is_(True))
                        .where((BotNumarasi.telefon.in_(adaylar)) | (BotNumarasi.kimlik.in_(adaylar)))).first()
     if not kayit or not kayit.kullanici:
-        bot.taninmayan(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin)
+        bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin, "Cevap verilmedi: kişi listede yok", tanindi=False)
         return {"cevap": None}
     # Grupta numara yerine gizli kimlik (@lid) gelir: numarasıyla tanınan kişinin kimliği öğrenilir
     lid = next((bot.rakamlar(y) for y in (veri.gonderen, veri.gonderen_alt) if y and y.endswith("@lid")), None)
@@ -178,6 +178,12 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     k = kayit.kullanici
     db.info["kullanici_id"] = k.id
     try:
-        return {"cevap": soru.cevapla(db, k, veri.metin, sohbet=True)}
+        cevap = soru.cevapla(db, k, veri.metin, sohbet=True)
+    except Exception as e:  # noqa: BLE001
+        bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, kayit.ad, veri.metin, f"Hata: {e}")
+        return {"cevap": "Bir hata oluştu, programda WhatsApp Botu ekranına bakın."}
     finally:
         db.rollback()  # bot hiçbir şeyi değiştirmez
+    bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, kayit.ad, veri.metin,
+                     "Cevap verildi" if cevap else "Cevap verilmedi: sohbet sayıldı", cevap)
+    return {"cevap": cevap}

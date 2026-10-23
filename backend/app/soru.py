@@ -90,6 +90,25 @@ def donem(s: str, bugun: date) -> tuple[date | None, date | None, str]:
     return None, None, ""
 
 
+def _santiye_yazilisi(w: str) -> bool:
+    """'şantiye' kelimesi ve yanlış yazılışları: santiye, santiesi, santyesi, şantiyede..."""
+    return w.startswith(("santi", "santy"))
+
+
+# Grupta sohbet sayılan kısa yazılar: cevap verilmez
+_SOHBET = {"tamam", "ok", "okey", "peki", "evet", "hayir", "sagol", "sagolun", "tesekkur", "tesekkurler", "eyvallah", "merhaba",
+           "selam", "gunaydin", "iyi", "aksamlar", "geceler", "gunler", "hayirli", "isler", "kolay", "gelsin", "olur", "anladim",
+           "super", "harika", "guzel", "haha", "tmm", "slm", "mrb", "tsk", "saol"}
+ANLAMADIM = "Anlayamadım. Neler sorabileceğinizi görmek için *yardım* yazın."
+
+
+def _yalniz_ad(s: str, adlar: list[str]) -> bool:
+    """Yazıda adın kelimeleri ve soru/zaman kelimelerinden başka kelime yok mu ("gebze santiesi" evet,
+    "yarın gebzeye gidiyorum" hayır)."""
+    ad_kelimeleri = [a for ad in adlar for a in kural.ad_anahtari(ad).split()]
+    return all(x in _ATILAN or x.isdigit() or _santiye_yazilisi(x) or _ad_puani([x], ad_kelimeleri) for x in _kelimeler(s))
+
+
 def _ad_puani(soru_kelimeleri: list[str], ad_kelimeleri: list[str]) -> int:
     """Sorudaki kaç kelime adın bir kelimesiyle başlıyor (ya da ad kelimesi soru kelimesinin başı: "gebzeye" -> "gebze")."""
     puan = 0
@@ -106,7 +125,7 @@ def ad_bul(s: str, kayitlar: list, ad=lambda x: kural.kayit_adlari(x), cekirdek=
     if tam:
         en = max(t[0] for t in tam)
         return list({id(x): x for n, x in tam if n == en}.values())
-    kelimeler = [w for w in _kelimeler(s) if len(w) >= 3 and w not in _ATILAN and not w.isdigit()]
+    kelimeler = [w for w in _kelimeler(s) if len(w) >= 3 and w not in _ATILAN and not w.isdigit() and not _santiye_yazilisi(w)]
     if not kelimeler:
         return []
     puanli = []
@@ -294,8 +313,9 @@ def genel_durum(db: Session, k: Kullanici, bugun: date) -> str:
 
 def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, sohbet: bool = False) -> str | None:
     """Sorunun cevabı; anlaşılmazsa None (WhatsApp'ta sohbet mesajlarına karışmamak için sessiz kalınır).
-    sohbet=True (WhatsApp grubu): yalnız adın geçtiği yazıya ("yarın Gebze'ye gidiyorum") cevap verilmez; soru kelimesi
-    (harcama, bakiye, çek, banka...) ya da soru işareti gerekir."""
+    sohbet=True (WhatsApp grubu): uzun yazıda yalnız ad geçiyorsa ("yarın Gebze'ye gidiyorum") cevap verilmez; soru kelimesi
+    (harcama, bakiye, çek, banka...), soru işareti ya da kısa yazı (en çok 4 kelime) gerekir. Anlaşılmayan kısa yazıya
+    "Anlayamadım, yardım yazın" denir; "tamam", "sağol" gibi sohbete cevap verilmez."""
     bugun = bugun or date.today()
     s = kural.sade(metin).strip(" ?!.")
     w = _kelimeler(s)
@@ -313,12 +333,14 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
 
     cek_sorusu = bool(ws & {"cek", "cekler", "cekleri", "ceki", "ceklerimiz", "senet", "senetler"})
     banka_sorusu = bool(ws & {"banka", "bankalar", "bankada", "bankadaki", "kasa", "kasada", "hesaplar", "kart"}) and not cek_sorusu
-    santiye_kelimesi = bool(ws & {"santiye", "santiyesi", "santiyenin", "santiyede", "santiyesinin", "harcama", "harcamasi",
-                                  "harcamalari", "harcanan", "gider", "gideri", "giderleri"})
-    cari_kelimesi = bool(ws & {"bakiye", "bakiyesi", "borc", "borcu", "borcumuz", "alacak", "alacagi", "alacagimiz", "cari",
-                               "carisi", "ekstre", "ekstresi"})
+    santiye_adi_gecti = any(_santiye_yazilisi(x) for x in w)
+    santiye_kelimesi = santiye_adi_gecti or any(x.startswith(("harca", "gider")) for x in w)
+    cari_kelimesi = any(x.startswith(("bakiy", "borc", "alaca", "cari", "ekstre")) for x in w)
+    # Grupta kısa yazı (en çok 4 kelime) soru sayılır: "gebze", "gebze santiesi", "ahmet yapı"
+    kisa = len(w) <= 4 and not set(w) <= _SOHBET
+    anlamadim = ANLAMADIM if sohbet and kisa else None
 
-    if sohbet and not (cek_sorusu or banka_sorusu or santiye_kelimesi or cari_kelimesi or metin.strip().endswith("?")):
+    if sohbet and not (cek_sorusu or banka_sorusu or santiye_kelimesi or cari_kelimesi or kisa or metin.strip().endswith("?")):
         return None
 
     if banka_sorusu and not cari_kelimesi or banka_sorusu and ws & {"bakiyeleri", "bakiyemiz"}:
@@ -337,7 +359,10 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
         return cek_cevabi(db, k, s, bugun, bulunan[0] if bulunan else None)
 
     s_bulunan = ad_bul(s, santiyeler) if not cari_kelimesi or santiye_kelimesi else []
+    soru_kelimesi = santiye_kelimesi or cari_kelimesi or metin.strip().endswith("?")
     if s_bulunan and (santiye_kelimesi or not cari_kelimesi):
+        if sohbet and not soru_kelimesi and not _yalniz_ad(s, [n for x in s_bulunan for n in kural.kayit_adlari(x)]):
+            return None
         if not _gorebilir(k, "santiye"):
             return _yetkisiz("santiye")
         if len(s_bulunan) > 1:
@@ -345,13 +370,15 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
         return santiye_cevabi(db, k, s_bulunan[0], s, bugun)
     c_bulunan = cari_bul()
     if c_bulunan:
+        if sohbet and not soru_kelimesi and not _yalniz_ad(s, [x.unvan for x in c_bulunan]):
+            return None
         if not _gorebilir(k, "cari"):
             return _yetkisiz("cari")
         if len(c_bulunan) > 1:
             return _hangisi("firma", [c.unvan for c in c_bulunan])
         return cari_cevabi(db, k, c_bulunan[0])
-    if santiye_kelimesi and ws & {"santiye", "santiyesi", "santiyenin", "santiyede"}:
-        return "Hangi şantiye? Adını yazar mısınız? (ör. \"GEBZE şantiye harcaması bu ay\")"
+    if santiye_adi_gecti:
+        return "Hangi şantiye? Şantiyenin adını da yazar mısınız? (ör. \"GEBZE şantiye harcaması bu ay\")"
     if cari_kelimesi:
-        return "Hangi firma? Adını yazar mısınız? (ör. \"ABC bakiye\")"
-    return None
+        return "Hangi firma? Firmanın adını da yazar mısınız? (ör. \"ABC bakiye\")"
+    return anlamadim

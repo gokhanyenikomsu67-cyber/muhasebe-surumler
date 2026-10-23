@@ -4264,23 +4264,31 @@ function whatsappBotuAc() {
         h("input", { name: "telefon", placeholder: "Telefon (0532 123 45 67)", required: true }),
         h("label", {}, "Hangi kullanıcının yetkisiyle: ", kullaniciSec(kullanicilar.kullanicilar.find((x) => x.ben)?.id)),
         h("button", { class: "dugme ana" }, "Ekle"));
-      const taninmayan = d.taninmayanlar.length ? h("div", {}, h("h3", {}, "Yazan ama listede olmayanlar (cevap verilmedi)"),
-        h("table", { class: "liste" }, h("tbody", {}, d.taninmayanlar.slice().reverse().map((t) => h("tr", {},
-          h("td", {}, t.zaman), h("td", {}, t.ad || "-"), h("td", {}, (t.alt || t.gonderen).split("@")[0]), h("td", {}, t.metin),
-          h("td", {}, h("button", { class: "dugme", onclick: () => {
-            const ad = prompt("Bu kişinin adı:", t.ad || "");
-            if (!ad) return;
-            const tel = [t.alt, t.gonderen].find((x) => x && x.includes("@s.whatsapp.net"));
-            const lid = [t.alt, t.gonderen].find((x) => x && x.endsWith("@lid"));
-            islem(() => api("/api/bot/numaralar", { metod: "POST", veri: { ad, telefon: tel || null, kimlik: lid || null,
-              kullanici_id: kullanicilar.kullanicilar.find((x) => x.ben).id } }), `${ad} eklendi.`);
-          } }, "Ekle"))))))) : "";
+      const ekle = (t) => {
+        const ad = prompt("Bu kişinin adı:", t.ad || "");
+        if (!ad) return;
+        const tel = [t.alt, t.gonderen].find((x) => x && x.includes("@s.whatsapp.net"));
+        const lid = [t.alt, t.gonderen].find((x) => x && x.endsWith("@lid"));
+        islem(() => api("/api/bot/numaralar", { metod: "POST", veri: { ad, telefon: tel || null, kimlik: lid || null,
+          kullanici_id: kullanicilar.kullanicilar.find((x) => x.ben).id } }), `${ad} eklendi.`);
+      };
+      // Botun çalıştığı buradan anlaşılır: gelen her yazı, kimden geldiği ve ne cevap verildiği
+      const gelenler = h("div", {}, h("h3", {}, "Son gelen mesajlar"),
+        d.mesajlar.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
+          h("thead", {}, h("tr", {}, ["Saat", "Kim", "Yazdığı", "Sonuç", "Cevap", ""].map((b) => h("th", {}, b)))),
+          h("tbody", {}, d.mesajlar.slice().reverse().map((t) => h("tr", {},
+            h("td", {}, t.zaman), h("td", {}, t.ad || (t.alt || t.gonderen).split("@")[0]), h("td", {}, t.metin),
+            h("td", { class: t.sonuc === "Cevap verildi" ? "" : "kirmizi" }, t.sonuc),
+            h("td", { style: "white-space:normal;max-width:360px" }, t.cevap.replace(/[*_]/g, "")),
+            h("td", {}, t.tanindi ? "" : h("button", { class: "dugme", onclick: () => ekle(t) }, "Listeye ekle"))))))) :
+          h("p", {}, d.durum === "bagli" ? "Henüz mesaj gelmedi. Denemek için grupta \"yardım\" yazın." : "Bot bağlı değil."),
+        d.mesajlar.length ? h("button", { class: "dugme", onclick: () => yenidenCiz() }, "Yenile") : "");
 
       el.append(h("div", { class: "liste-ust" }, h("h2", {}, "WhatsApp Botu")), durumKutusu, qr,
         h("h3", {}, "Soru sorabilecek kişiler"),
         h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
           h("thead", {}, h("tr", {}, ["Ad", "Telefon", "Yetkisi", "Durum", ""].map((b) => h("th", {}, b)))), h("tbody", {}, satirlar))),
-        form, taninmayan,
+        form, gelenler,
         ACIKLAMA("Bot için ayrı bir hat kullanın ve bu numarayı WhatsApp grubunuza ekleyin. Program açıkken bot, listedeki kişilerin sorularına (ör. \"GEBZE şantiye harcaması\", \"ABC bakiye\", \"bu hafta çekler\", \"banka bakiyeleri\", \"yardım\") programdaki verilerle cevap verir. Bot yalnız bilgi verir, hiçbir kaydı değiştirmez; kişi, seçilen kullanıcının göremediği bölümü soramaz. Cevaplar WhatsApp üzerinden gider. Bu yol WhatsApp'ın resmi iş yolu değildir; ana hattınızı kullanmayın."));
       // QR ve bağlantı durumu değiştikçe ekran kendini yeniler
       if (["qr", "baslatiliyor", "baglaniyor"].includes(d.durum) || d.kurulum?.durum === "kuruluyor") {

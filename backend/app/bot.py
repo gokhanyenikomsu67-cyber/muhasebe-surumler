@@ -25,7 +25,7 @@ ANA_ADRES = os.environ.get("MUHASEBE_BOT_ADRES", "http://127.0.0.1:" + os.enviro
 
 DURUM: dict = {"durum": "kapali", "qr": None, "numara": None, "hata": None, "zaman": 0.0}
 KURULUM: dict = {"durum": None, "hata": None}
-TANINMAYANLAR: list[dict] = []  # son tanınmayan yazanlar (ekranda "Ekle" ile numara olarak eklenir)
+MESAJLAR: list[dict] = []  # son gelen yazılar ve ne yapıldığı (ekranda; listede olmayan kişi "Ekle" ile eklenir)
 _SUREC: dict = {"p": None}
 _KILIT = threading.Lock()
 
@@ -169,6 +169,8 @@ def bekci() -> None:
         time.sleep(60)
 
 
-def taninmayan(gonderen: str, alt: str | None, ad: str | None, metin: str) -> None:
-    kayit = {"gonderen": gonderen, "alt": alt, "ad": ad, "metin": (metin or "")[:80], "zaman": time.strftime("%d.%m %H:%M")}
-    TANINMAYANLAR[:] = [x for x in TANINMAYANLAR if x["gonderen"] != gonderen][-19:] + [kayit]
+def mesaj_kaydet(gonderen: str, alt: str | None, ad: str | None, metin: str, sonuc: str, cevap: str | None = None,
+                 tanindi: bool = True) -> None:
+    MESAJLAR[:] = MESAJLAR[-29:] + [{"zaman": time.strftime("%d.%m %H:%M"), "gonderen": gonderen, "alt": alt, "ad": ad,
+                                     "metin": (metin or "")[:80], "sonuc": sonuc, "cevap": (cevap or "")[:120],
+                                     "tanindi": tanindi}]

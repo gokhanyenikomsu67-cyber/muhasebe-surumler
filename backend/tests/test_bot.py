@@ -100,9 +100,18 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "tamam sağol"}).json()["cevap"] is None
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "yarın gebzeye gidiyorum"}).json()["cevap"] is None
         assert "Gebze Fabrika" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "gebze?"}).json()["cevap"]
+        # Kısa yazı soru sayılır, şantiye yanlış yazılsa da ("santiesi"); anlaşılmayan kısa yazıya "yardım yazın" denir
+        for m in ("gebze santiesi", "Gebze", "gebze şantiyesi ne durumda"):
+            assert "Gebze Fabrika" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": m}).json()["cevap"], m
+        assert "Demir Çelik" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "demir çelik"}).json()["cevap"]
+        assert "yardım" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "kasım raporu"}).json()["cevap"]
+        assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "tamam teşekkürler"}).json()["cevap"] is None
+        # Ekranda son gelenler: kim, ne yazdı, ne yapıldı
+        son = bot.MESAJLAR[-2:]
+        assert son[0]["ad"] == "Patron 1" and son[0]["sonuc"] == "Cevap verildi" and son[1]["sonuc"].startswith("Cevap verilmedi")
         # Tanınmayan kişi: cevap yok, ekranda listelenir
         r = client.post(yol, headers=anahtar, json={"gonderen": "905009998877@s.whatsapp.net", "ad": "Yabancı", "metin": "banka"})
-        assert r.json()["cevap"] is None and any(x["ad"] == "Yabancı" for x in bot.TANINMAYANLAR)
+        assert r.json()["cevap"] is None and any(x["ad"] == "Yabancı" and not x["tanindi"] for x in bot.MESAJLAR)
     finally:
         R.YEREL.discard("testclient")
 
