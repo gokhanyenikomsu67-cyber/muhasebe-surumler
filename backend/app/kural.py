@@ -32,6 +32,16 @@ def sade(metin: str) -> str:
     return " ".join(metin.split())
 
 
+_TR_ALFABE = "0123456789abcçdefgğhıijklmnoöpqrsştuüvwxyz"
+_TR_SIRA = {h: i for i, h in enumerate(_TR_ALFABE)}
+
+
+def tr_sira(metin: str | None) -> tuple:
+    """Türkçe alfabe sırası, büyük/küçük harf gözetmeden (A B C Ç ... I İ ... O Ö ... U Ü); listelerin sıralama anahtarı."""
+    metin = " ".join((metin or "").replace("İ", "i").replace("I", "ı").lower().split())
+    return tuple(_TR_SIRA.get(h, -1 if h == " " else 100 + ord(h)) for h in metin)
+
+
 def ad_anahtari(ad: str | None) -> str:
     """Aynı kaydın adı mı: harf/Türkçe karakter, nokta ve boşluk farkı yok sayılır ('Ofis', 'OFİS ', 'Ltd. Şti.' = 'LTD ŞTİ')."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", sade(ad)).split())

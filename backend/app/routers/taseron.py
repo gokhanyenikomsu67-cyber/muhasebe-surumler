@@ -52,7 +52,8 @@ def _depo_dogrula(db: Session, veri: schemas.DepoGiris, k: Kullanici):
 
 @router.get("/depolar")
 def depolar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    return [_depo_cikis(d) for d in db.scalars(select(Depo).where(Depo.sirket_id == k.sirket_id).order_by(Depo.ad))]
+    return [_depo_cikis(d) for d in sorted(db.scalars(select(Depo).where(Depo.sirket_id == k.sirket_id)),
+                                           key=lambda d: kural.tr_sira(d.ad))]
 
 
 @router.post("/depolar")
@@ -427,7 +428,8 @@ def taseronlar(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kulla
     """Depoya bağlı ya da taşeron gideri olan cariler (taşeron sayfası seçimi için)."""
     idler = set(db.scalars(select(Depo.cari_id).where(Depo.sirket_id == k.sirket_id, Depo.cari_id.is_not(None)))) | \
         set(db.scalars(select(TaseronGider.cari_id).where(TaseronGider.sirket_id == k.sirket_id)))
-    return [{"id": c.id, "unvan": c.unvan} for c in db.scalars(select(Cari).where(Cari.id.in_(idler)).order_by(Cari.unvan))]
+    return [{"id": c.id, "unvan": c.unvan} for c in sorted(db.scalars(select(Cari).where(Cari.id.in_(idler))),
+                                                                  key=lambda _x: kural.tr_sira(_x.unvan))]
 
 
 # --- Depo bazlı harcama raporu -----------------------------------------------

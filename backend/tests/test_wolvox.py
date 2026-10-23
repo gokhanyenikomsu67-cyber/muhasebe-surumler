@@ -138,3 +138,10 @@ def test_santiye_ve_depo_aktif_pasif():
     assert client.post("/api/santiyeler/durum", json={"idler": [s["id"]], "durum": "sil"}, headers=h).status_code == 422
     client.post("/api/santiyeler/durum", json={"idler": [s["id"]], "durum": "aktif"}, headers=h)
     assert client.get("/api/santiyeler", headers=h).json()[0]["durum"] == "aktif"
+
+
+def test_turkce_alfabe_sirasi():
+    from app import kural
+    adlar = ["Zeytin 2026 örnek", "ÖRNEK B", "İNCİR", "ÇAM", "IHLAMUR", "CEVİZ", "UĞRAK", "ULU", "ORMAN"]
+    assert sorted(adlar, key=kural.tr_sira) == ["CEVİZ", "ÇAM", "IHLAMUR", "İNCİR", "ORMAN", "ÖRNEK B", "UĞRAK", "ULU",
+                                               "Zeytin 2026 örnek"]

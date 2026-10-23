@@ -108,10 +108,10 @@ def bagli_kayitlar(db: Session, cari_id: int | None = None, santiye_id: int | No
 
 @router.get("/cariler", response_model=list[schemas.CariCikis])
 def cariler(ara: str = "", db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    q = select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.unvan)
+    q = select(Cari).where(Cari.sirket_id == k.sirket_id)
     if ara:
         q = q.where(Cari.unvan.ilike(f"%{ara}%") | Cari.vkn.ilike(f"%{ara}%"))
-    return db.scalars(q).all()
+    return sorted(db.scalars(q).all(), key=lambda c: kural.tr_sira(c.unvan))
 
 
 def kendi_vkn_reddet(db: Session, k: Kullanici, vkn: str | None) -> None:
@@ -157,7 +157,7 @@ def benzer_cariler(unvan: str = "", vkn: str = "", db: Session = Depends(get_db)
     """Yeni cari açılmadan önce: aynı VKN'li ya da adı benzeyen cariler (ekler, Türkçe karakter, küçük yazım farkı yok sayılır)."""
     vkn = "".join(ch for ch in vkn if ch.isdigit())
     sonuc = []
-    for c in db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.unvan)):
+    for c in sorted(db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.unvan)):
         ayni_vkn = bool(vkn and c.vkn and "".join(ch for ch in c.vkn if ch.isdigit()) == vkn)
         if ayni_vkn or (unvan.strip() and kural.benzer_unvan(unvan, c.unvan)
                         and not (vkn and c.vkn and "".join(ch for ch in c.vkn if ch.isdigit()) != vkn)):
@@ -213,7 +213,7 @@ def cari_sil(cari_id: int, db: Session = Depends(get_db), k: Kullanici = Depends
 
 @router.get("/santiyeler", response_model=list[schemas.SantiyeCikis])
 def santiyeler(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    return db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id).order_by(Santiye.ad)).all()
+    return sorted(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)).all(), key=lambda s: kural.tr_sira(s.ad))
 
 
 @router.post("/santiyeler", response_model=schemas.SantiyeCikis)

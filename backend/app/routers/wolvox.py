@@ -233,7 +233,7 @@ def onizle(dosya: UploadFile = File(...), db: Session = Depends(get_db), k: Kull
                             "toplam": round(x["toplam"], 2), "oneri": _oneri(g or None, santiyeler, depolar, adlar),
                             "benzer": _benzer_grup(g, adlar) if g else None}
                            for g, x in gruplar.items()), key=lambda x: (x["grup"] == "", kural.sade(x["grup"]))),
-        "santiyeler": [s.ad for s in sorted(santiyeler, key=lambda s: kural.sade(s.ad))],
+        "santiyeler": [s.ad for s in sorted(santiyeler, key=lambda s: kural.tr_sira(s.ad))],
     }
 
 

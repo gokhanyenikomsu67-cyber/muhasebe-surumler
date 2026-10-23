@@ -787,7 +787,7 @@ function taseronAc(cariId = null) {
 }
 
 function depoRaporuAc() {
-  const filtre = { santiye: "", depo: "", ay: "" };
+  const filtre = { santiye: "", depo: "", ay: "", gorunum: "aktif" };
   const sorgu = () => {
     const q = new URLSearchParams();
     if (filtre.santiye) q.set("santiye_id", filtre.santiye);
@@ -804,8 +804,17 @@ function depoRaporuAc() {
       let santiyeler, depolar, satirlar;
       try { [santiyeler, depolar, satirlar] = await Promise.all([api("/api/santiyeler"), api("/api/depolar"), api(`/api/raporlar/depo-harcamalari?${sorgu()}`)]); }
       catch (e) { return bildir(e.message, true); }
-      const sec = (liste, alanAd, bos) => h("select", { onchange: (e) => (filtre[alanAd] = e.target.value) },
-        [["", bos], ...liste].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre[alanAd] }, m)));
+      // Şantiye kutusunda yalnız şantiyeler, depo kutusunda yalnız depolar; şantiye seçilince yalnız onun depoları
+      const santiyeS = h("select", { onchange: (e) => { filtre.santiye = e.target.value; depolariDoldur(); } });
+      const depoS = h("select", { onchange: (e) => (filtre.depo = e.target.value) });
+      const santiyeleriDoldur = () => santiyeS.replaceChildren(...secenekler(gorunumeGore(santiyeler, filtre.gorunum, filtre.santiye), "— Tüm şantiyeler —", filtre.santiye));
+      const depolariDoldur = () => {
+        const uygun = gorunumeGore(depolar, filtre.gorunum, filtre.depo).filter((d) => !filtre.santiye || String(d.santiye_id) === filtre.santiye || String(d.id) === filtre.depo);
+        if (filtre.depo && !uygun.some((d) => String(d.id) === filtre.depo)) filtre.depo = "";
+        depoS.replaceChildren(...secenekler(uygun, "— Tüm depolar —", filtre.depo, filtre.santiye ? (d) => d.ad : depoEtiketi));
+      };
+      santiyeleriDoldur();
+      depolariDoldur();
       const govde = [];
       const gruplar = new Map();
       for (const r of satirlar) { const k = `${r.santiye} / ${r.depo}`; if (!gruplar.has(k)) gruplar.set(k, []); gruplar.get(k).push(r); }
@@ -821,8 +830,8 @@ function depoRaporuAc() {
         govde.push(h("tr", { class: "ara-toplam" }, h("td", { colspan: 8 }, `${ad} toplamı`), ...["tutar", "kdv", "toplam"].map((a) => h("td", { class: "sayi" }, para(top(dizi, a))))));
       }
       el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, "Depo Bazlı Harcamalar"),
-          "Şantiye:", sec(santiyeler.map((x) => [x.id, x.ad]), "santiye", "— Tüm şantiyeler —"),
-          "Depo:", sec(depolar.map((d) => [d.id, depoEtiketi(d)]), "depo", "— Tüm depolar —"),
+          gorunumSecimi(filtre, () => { santiyeleriDoldur(); depolariDoldur(); }),
+          "Şantiye:", santiyeS, "Depo:", depoS,
           "Ay:", h("input", { type: "month", value: filtre.ay, onchange: (e) => (filtre.ay = e.target.value) }),
           h("button", { class: "dugme ana", onclick: () => yenidenCiz() }, "Ara"),
           h("button", { class: "dugme", onclick: () => { filtre.ay = ""; filtre.santiye = ""; filtre.depo = ""; yenidenCiz(); } }, "Temizle"),
@@ -984,7 +993,7 @@ async function benzerMalzemeKontrol() {
 
 function malzemeRaporuAc(yon = "gelen") {
   const ad = yon === "giden" ? "Malzeme Bazlı Satışlar" : "Malzeme Bazlı Alışlar";
-  const filtre = { cari: "", santiye: "", baslangic: "", bitis: "" };
+  const filtre = { cari: "", santiye: "", baslangic: "", bitis: "", gorunum: "aktif" };
   const acik = new Set();
   const sorgu = () => {
     const q = new URLSearchParams({ yon });
@@ -1001,8 +1010,9 @@ function malzemeRaporuAc(yon = "gelen") {
       catch (e) { return bildir(e.message, true); }
       const cariS = h("select", { onchange: (e) => (filtre.cari = e.target.value) },
         [["", "— Tüm firmalar —"], ...cariler.map((c) => [c.id, c.unvan])].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre.cari }, m)));
-      const santiyeS = h("select", { onchange: (e) => (filtre.santiye = e.target.value) },
-        [["", "— Tüm şantiyeler —"], ...santiyeler.map((s) => [s.id, s.ad])].map(([d, m]) => h("option", { value: d, selected: String(d) === filtre.santiye }, m)));
+      const santiyeS = h("select", { onchange: (e) => (filtre.santiye = e.target.value) });
+      const santiyeleriDoldur = () => santiyeS.replaceChildren(...secenekler(gorunumeGore(santiyeler, filtre.gorunum, filtre.santiye), "— Tüm şantiyeler —", filtre.santiye));
+      santiyeleriDoldur();
       const tarihK = (alan) => h("input", { type: "date", value: filtre[alan], onchange: (e) => (filtre[alan] = e.target.value) });
       const bekleyen = veri.ozet.filter((x) => x.eslesme_bekliyor).length;
       const miktar = (v, b) => `${Number(v).toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${b === "-" ? "" : b}`;
@@ -1026,7 +1036,7 @@ function malzemeRaporuAc(yon = "gelen") {
         }
       }
       el.append(h("div", { class: "liste-ust", style: "flex-wrap:wrap" }, h("h2", {}, ad),
-          "Firma:", cariS, "Şantiye:", santiyeS, "Tarih:", tarihK("baslangic"), "–", tarihK("bitis"),
+          "Firma:", cariS, gorunumSecimi(filtre, santiyeleriDoldur), "Şantiye:", santiyeS, "Tarih:", tarihK("baslangic"), "–", tarihK("bitis"),
           h("button", { class: "dugme ana", onclick: () => yenidenCiz() }, "Ara"),
           h("button", { class: "dugme", onclick: () => { Object.keys(filtre).forEach((a) => (filtre[a] = "")); yenidenCiz(); } }, "Temizle"),
           h("button", { class: "dugme", onclick: () => this.excel() }, "Excel'e aktar (F9)"),
@@ -1391,6 +1401,17 @@ function aramaliSec(sel, { yeniYazi, yeniAc, bosYazi = "", yeniIpucu } = {}) {
 // Pasif şantiye/depo seçim listelerinde görünmez (kalabalık yapmasın); kayıtta zaten seçili olan yine görünür
 const aktifMi = (x) => !x.durum || x.durum === "aktif";
 const secimeUygun = (liste, ...tutulan) => { const t = tutulan.flat().filter(Boolean); return liste.filter((x) => aktifMi(x) || t.includes(x.id)); };
+
+// Rapor süzgeçlerinde şantiye/depo listesi: Aktifler / Pasifler / Tümü (seçili olan her durumda görünür)
+const gorunumeGore = (liste, gorunum, secili) => liste.filter((x) => (gorunum === "tumu" || (gorunum === "pasif" ? !aktifMi(x) : aktifMi(x)))
+  || (secili && String(x.id) === String(secili)));
+const secenekler = (liste, bos, secili, etiket = (x) => x.ad) =>
+  [["", bos], ...liste.map((x) => [String(x.id), etiket(x)])].map(([d, m]) => h("option", { value: d, selected: d === String(secili ?? "") }, m));
+function gorunumSecimi(filtre, degisti) {
+  return h("label", { title: "Listede aktif mi pasif mi olanlar görünsün" }, "Liste: ",
+    h("select", { onchange: (e) => { filtre.gorunum = e.target.value; degisti(); } },
+      [["aktif", "Aktifler"], ["pasif", "Pasifler"], ["tumu", "Tümü"]].map(([d, m]) => h("option", { value: d, selected: d === (filtre.gorunum || "aktif") }, m))));
+}
 
 // Toplu atama için şantiye seçici: yazarak aranır, yoksa yazılan adla şantiye açılıp seçilir. Değer kap.secim.value
 function santiyeSecici(santiyeler, bosYazi = "— Şantiye seçin —", tutulan = []) {
@@ -2310,7 +2331,7 @@ function santiyeOzetAc() {
 
 function santiyeFaturalariAc() {
   // Varsayılan: alış faturaları, tüm aylar, tüm şantiyeler. Şantiye listeden seçilir, "Ara" ile o şantiyenin bütün harcamaları gelir
-  const filtre = { yon: "gelen", ay: "", secili: new Set() };
+  const filtre = { yon: "gelen", ay: "", secili: new Set(), gorunum: "aktif" };
   let bekleyen = "";
   const sorgu = () => {
     const q = new URLSearchParams();
@@ -2330,8 +2351,9 @@ function santiyeFaturalariAc() {
       catch (e) { return bildir(e.message, true); }
       const ara = () => { filtre.secili = new Set(bekleyen ? [Number(bekleyen)] : []); yenidenCiz(); };
       bekleyen = filtre.secili.size ? String([...filtre.secili][0]) : "";
-      const secimS = h("select", { style: "min-width:260px", onchange: (e) => (bekleyen = e.target.value) },
-        [["", "— Tüm şantiyeler —"], ...santiyeler.map((st) => [String(st.id), st.ad])].map(([d, m]) => h("option", { value: d, selected: d === bekleyen }, m)));
+      const secimS = h("select", { style: "min-width:260px", onchange: (e) => (bekleyen = e.target.value) });
+      const santiyeleriDoldur = () => secimS.replaceChildren(...secenekler(gorunumeGore(santiyeler, filtre.gorunum, bekleyen), "— Tüm şantiyeler —", bekleyen));
+      santiyeleriDoldur();
       const top = (dizi, a) => dizi.reduce((t, r) => t + r[a], 0);
       // Her satır bir kalem (bütün harcamalar); kalemsiz fatura tek satır
       const kalemleri = (r) => (r.kalem_detay?.length ? r.kalem_detay
@@ -2364,7 +2386,7 @@ function santiyeFaturalariAc() {
           "Ay:", h("input", { type: "month", value: filtre.ay, onchange: (e) => { filtre.ay = e.target.value; yenidenCiz(); } }),
           h("button", { class: "dugme", onclick: () => { filtre.ay = ""; yenidenCiz(); } }, "Tüm aylar"),
           h("button", { class: "dugme ana", onclick: () => this.excel() }, "Excel'e aktar (F9)")),
-        h("div", { class: "liste-ust" }, "Şantiye:", santiyeler.length ? secimS : "Henüz şantiye yok.",
+        h("div", { class: "liste-ust" }, gorunumSecimi(filtre, santiyeleriDoldur), "Şantiye:", santiyeler.length ? secimS : "Henüz şantiye yok.",
           h("button", { class: "dugme ana", onclick: ara }, "Ara")),
         h("h3", { style: "margin:6px 0" }, `${seciliAd || "Tüm şantiyeler"}: ${satirlar.length} fatura, ${kalemSayisi} kalem, toplam ${para(top(satirlar, "genel_toplam"))} TL`),
         turler.size ? h("div", { class: "liste-ust", style: "flex-wrap:wrap;font-size:13px" }, "Gider türüne göre:",

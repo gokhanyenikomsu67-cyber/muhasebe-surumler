@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import schemas, yetki
+from .. import kural, schemas, yetki
 from ..auth import aktif_kullanici, yazabilir
 from ..db import get_db
 from ..hesap import banka_bakiyeleri, kasa_bakiyesi
@@ -52,10 +52,10 @@ def hizli_ara(q: str = "", db: Session = Depends(get_db), k: Kullanici = Depends
         return sonuc
     icinde = lambda *alanlar: aranan and any(aranan in _sade(a) for a in alanlar if a)  # noqa: E731
     ayni_tutar = lambda v: tutar is not None and abs(float(v or 0) - tutar) < 0.01  # noqa: E731
-    for c in db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.unvan)):
+    for c in sorted(db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.unvan)):
         if icinde(c.unvan, c.vkn, c.telefon):
             sonuc["cariler"].append({"id": c.id, "unvan": c.unvan, "vkn": c.vkn})
-    for s in db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id).order_by(Santiye.ad)):
+    for s in sorted(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.ad)):
         if icinde(s.ad):
             sonuc["santiyeler"].append({"id": s.id, "ad": s.ad})
     for f in db.scalars(select(Fatura).where(Fatura.sirket_id == k.sirket_id)

@@ -62,7 +62,7 @@ def santiye_ozet_veri(db: Session, k: Kullanici) -> list[dict]:
         Hareket.sirket_id == k.sirket_id, Hareket.durum == "onayli", Hareket.santiye_id.is_not(None),
         Hareket.tur.in_(["masraf", "banka_masrafi"]))).all()
     sonuc = []
-    for s in db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id).order_by(Santiye.ad)):
+    for s in sorted(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.ad)):
         gider = gelir = 0.0
         turler: dict[str, float] = defaultdict(float)
         for f, paylar in faturalar:
@@ -136,7 +136,7 @@ def santiye_ozet(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kul
 def cari_bakiye_veri(db: Session, k: Kullanici) -> list[dict]:
     toplam = cari_bakiyeleri(db, k.sirket_id)
     sonuc = []
-    for c in db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.unvan)):
+    for c in sorted(db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.unvan)):
         t = toplam.get(c.id, {"borc": 0.0, "alacak": 0.0})
         # Pozitif bakiye: cari bize borçlu. Negatif: biz cariye borçluyuz.
         sonuc.append({"id": c.id, "unvan": c.unvan, "vkn": c.vkn, "borc": round(t["borc"], 2),
@@ -230,7 +230,7 @@ CARI_SUTUNLARI = [("unvan", "Ünvan"), ("tur", "Tür"), ("vkn", "VKN/TCKN"), ("v
 
 @router.get("/excel/cariler")
 def excel_cariler(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
-    cariler = db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id).order_by(Cari.unvan)).all()
+    cariler = sorted(db.scalars(select(Cari).where(Cari.sirket_id == k.sirket_id)), key=lambda _x: kural.tr_sira(_x.unvan))
     return _excel("Cariler", [b for _, b in CARI_SUTUNLARI], [[getattr(c, a) for a, _ in CARI_SUTUNLARI] for c in cariler], "cariler")
 
 

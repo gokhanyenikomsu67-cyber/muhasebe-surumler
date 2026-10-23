@@ -97,9 +97,9 @@ def ozetler(satir: list[dict]) -> tuple[list[dict], list[dict]]:
              "kalan_miktar": round(g["giren_miktar"] - g["cikan_miktar"], 4),
              "kalan_tutar": round(g["giren_tutar"] - g["cikan_tutar"], 2), "santiye_sayisi": len(g["santiyeler"])}
             for g in mz.values()]
-    ozet.sort(key=lambda x: (kural.sade(x["malzeme"]), x["birim"]))
+    ozet.sort(key=lambda x: (kural.tr_sira(x["malzeme"]), x["birim"]))
     cikis = [{**s, "miktar": round(s["miktar"], 4), "tutar": round(s["tutar"], 2)} for s in sm.values()]
-    cikis.sort(key=lambda x: (kural.sade(x["santiye"]), kural.sade(x["malzeme"])))
+    cikis.sort(key=lambda x: (kural.tr_sira(x["santiye"]), kural.tr_sira(x["malzeme"])))
     return ozet, cikis
 
 

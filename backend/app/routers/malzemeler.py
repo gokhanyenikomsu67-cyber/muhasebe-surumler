@@ -28,7 +28,7 @@ def _kart_cikis(m: Malzeme) -> dict:
 @router.get("/malzemeler")
 def liste(db: Session = Depends(get_db), k: Kullanici = Depends(aktif_kullanici)):
     dizin, _ = malzeme.guncelle(db, k.sirket_id)
-    return sorted((_kart_cikis(m) for m in dizin.kartlar), key=lambda x: kural.sade(x["ad"]))
+    return sorted((_kart_cikis(m) for m in dizin.kartlar), key=lambda x: kural.tr_sira(x["ad"]))
 
 
 @router.get("/malzemeler/bekleyen")
@@ -181,8 +181,8 @@ def rapor_veri(db: Session, k: Kullanici, yon: str, cari_id: int | None, santiye
                      "ortalama_fiyat": round(g["tutar"] / g["miktar"], 4) if g["miktar"] else None,
                      "fatura_sayisi": len(g["faturalar"]), "cari_sayisi": len(g["cariler"] - {None}),
                      "yazilislar": sorted(g["adlar"])})
-    ozet.sort(key=lambda x: (kural.sade(x["malzeme"]), x["birim"]))
-    ayrinti.sort(key=lambda x: (kural.sade(x["malzeme"]), x["birim"], x["tarih"]))
+    ozet.sort(key=lambda x: (kural.tr_sira(x["malzeme"]), x["birim"]))
+    ayrinti.sort(key=lambda x: (kural.tr_sira(x["malzeme"]), x["birim"], x["tarih"]))
     return ozet, ayrinti
 
 
