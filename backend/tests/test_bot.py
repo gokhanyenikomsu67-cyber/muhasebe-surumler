@@ -27,6 +27,14 @@ def _kur():
     return h
 
 
+def test_vadesi_gecen_cek_gosterilmez():
+    h = _kur()
+    client.post("/api/cekler", json={"yon": "alinan", "tutar": 777, "vade": (BUGUN - timedelta(days=300)).isoformat()}, headers=h)
+    for soru_ in ("bu hafta çekler", "çekler", "tüm çekler", "genel durum"):
+        assert "777,00" not in _sor(h, soru_), soru_
+    assert "4.000,00 TL" in _sor(h, "çekler")
+
+
 def _sor(h, metin):
     return client.get("/api/bot/sor", params={"metin": metin}, headers=h).json()["cevap"]
 

@@ -188,11 +188,15 @@ def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None
         bit, etiket = None, "tümü"
     elif not etiket and not cari:
         bit, etiket = bugun + timedelta(days=7), "7 gün içinde"
+    # Vadesi geçenler gösterilmez (kullanıcı isteği): dönem bugünden başlar; yalnız tamamı geçmişte kalan dönem
+    # ("geçen ay çekler") sorulursa o dönemin çekleri gelir
+    if not (bit and bit < bugun):
+        bas = max(bas or bugun, bugun)
+    q = q.where(Cek.vade >= bas)
     if bit:
-        # Vadesi geçip hâlâ açık olanlar da gösterilir (bas'tan öncekiler gecikmiştir)
         q = q.where(Cek.vade <= bit)
     cekler = list(db.scalars(q.order_by(Cek.vade, Cek.id)))
-    baslik = "*Açık çekler*" + (f" — {cari.unvan}" if cari else "") + (f" ({etiket}, vadesi geçenler dahil)" if bit else "")
+    baslik = "*Açık çekler*" + (f" — {cari.unvan}" if cari else "") + (f" ({etiket})" if etiket else "")
     if not cekler:
         return baslik + "\nKayıt yok."
     parcalar = [baslik]
@@ -202,10 +206,9 @@ def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None
             continue
         parcalar.append(f"\n_{ad}: {len(liste)} çek, {para(sum(float(c.tutar) for c in liste))}_")
         for c in liste[:EN_COK_SATIR]:
-            gecti = " ⚠️ vadesi geçti" if c.vade < bugun else ""
             kim = c.cari.unvan if c.cari else (c.kesideci or c.lehtar or "")
             durum = CEK_DURUMLARI[y].get(c.durum, c.durum)
-            parcalar.append(f"• {gun_ay(c.vade)} · {kim or '-'} · {para(float(c.tutar))} ({durum}){gecti}")
+            parcalar.append(f"• {gun_ay(c.vade)} · {kim or '-'} · {para(float(c.tutar))} ({durum})")
         if len(liste) > EN_COK_SATIR:
             parcalar.append(f"… ve {len(liste) - EN_COK_SATIR} çek daha")
     return "\n".join(parcalar)
@@ -264,7 +267,7 @@ def cari_cevabi(db: Session, k: Kullanici, c: Cari) -> str:
     satirlar = [durum, f"Toplam borç: {para(t['borc'])} · Toplam alacak: {para(t['alacak'])}"]
     if _gorebilir(k, "cek"):
         acik = list(db.scalars(select(Cek).where(Cek.sirket_id == k.sirket_id, Cek.cari_id == c.id,
-                                                 Cek.durum.in_(ACIK_CEK_DURUMLARI))))
+                                                 Cek.durum.in_(ACIK_CEK_DURUMLARI), Cek.vade >= date.today())))
         if acik:
             satirlar.append(f"Açık çek: {len(acik)} adet, {para(sum(float(x.tutar) for x in acik))} "
                             f"(en yakın vade {gun_ay(min(x.vade for x in acik))})")
@@ -302,8 +305,8 @@ def genel_durum(db: Session, k: Kullanici, bugun: date) -> str:
         acik = list(db.scalars(select(Cek).where(Cek.sirket_id == k.sirket_id, Cek.durum.in_(ACIK_CEK_DURUMLARI))))
         hafta = bugun + timedelta(days=7)
         for y, ad in (("alinan", "Portföydeki çek"), ("verilen", "Ödenecek çek")):
-            liste = [c for c in acik if c.yon == y]
-            yakin = [c for c in liste if c.vade <= hafta]
+            liste = [c for c in acik if c.yon == y and c.vade >= bugun]  # vadesi geçenler gösterilmez
+            yakin = [c for c in liste if bugun <= c.vade <= hafta]
             satirlar.append(f"{ad}: {para(sum(float(c.tutar) for c in liste))}"
                             + (f" (7 gün içinde {len(yakin)} çek, {para(sum(float(c.tutar) for c in yakin))})" if yakin else ""))
     return "\n".join(satirlar) if len(satirlar) > 1 else _yetkisiz("rapor")
