@@ -23,7 +23,7 @@ from . import karekod, kural, schemas
 from .db import VERI_KLASORU, SessionLocal
 from .models import Cari, Fatura, Sirket
 
-SURUM = 16
+SURUM = 17
 UYDURMA_SATIR = "KDV'siz / istisna tutar"  # eski sürüm toplam farkını bu satırla kapatıyordu
 RAPOR = VERI_KLASORU / "onarim-raporu.json"
 
@@ -85,8 +85,8 @@ def cari_sorunu(c: Cari, sirket: Sirket) -> str | None:
         return "adı faturada yazmıyor; adını yazın"
     if _vkn(sirket.vkn) and _vkn(c.vkn) == _vkn(sirket.vkn):
         return "VKN'si firmamızın VKN'si"
-    if not c.vkn and kural.kendi_unvani_mi(c.unvan, sirket.unvan):
-        return "firmamızın kendi adı"
+    if kural.kendi_unvani_mi(c.unvan, sirket.unvan):
+        return "firmamızın kendi adı"  # VKN'li olsa da: karşı firmanın VKN'si bizim adımızla okunmuş (Kent Konut)
     if kural.kotu_unvan(c.unvan):
         return "adı etiket ya da adres gibi görünüyor"
     return None
@@ -200,6 +200,9 @@ def carileri_duzelt(db, sirket: Sirket, eski_surum: int = SURUM, yalniz_sorunlu:
                 c.vkn = vkn
                 if kendi and karsi.get("unvan") and not kural.kotu_unvan(karsi["unvan"]):
                     c.unvan = karsi["unvan"].strip()  # cari bu firmanınmış; eski ad bizim faturamızdan karışmıştı
+            if not kendi and c.vkn and kural.kendi_unvani_mi(c.unvan, sirket.unvan) and karsi.get("unvan") \
+                    and not kural.kendi_unvani_mi(karsi["unvan"], sirket.unvan) and not kural.kotu_unvan(karsi["unvan"]):
+                c.unvan = karsi["unvan"].strip()  # VKN karşı firmanın, ad bizimdi: ad belgedeki karşı firmanın adı olur
             if kural.daha_iyi_unvan(c.unvan, karsi.get("unvan")):
                 c.unvan = karsi["unvan"].strip()
             if not kendi:

@@ -750,12 +750,14 @@ def cari_bul_ya_ac(db: Session, k: Kullanici, karsi: dict, tur: str) -> tuple[Ca
         vkn = None  # kendi VKN'miz hiçbir cariye yazılmaz (alıcı bilgisi satıcıya karışmış)
     sirket = db.get(Sirket, k.sirket_id)
     unvan = (karsi.get("unvan") or "").strip()
-    if kural.kotu_unvan(unvan) or (not vkn and kural.kendi_unvani_mi(unvan, sirket.unvan)):
-        unvan = ""  # "Ticaret Sicil No" gibi etiketle ya da (başka VKN yokken) kendi adımızla cari açılmaz / seçilmez
+    if kural.kotu_unvan(unvan) or kural.kendi_unvani_mi(unvan, sirket.unvan):
+        unvan = ""  # "Ticaret Sicil No" gibi etiketle ya da kendi adımızla cari açılmaz / seçilmez
     if vkn:
         cari = db.scalar(select(Cari).where(Cari.sirket_id == k.sirket_id, Cari.vkn == vkn))
         if cari:
-            if (cari.ad_otomatik or kural.kotu_unvan(cari.unvan)) and kural.daha_iyi_unvan(cari.unvan, unvan):
+            if unvan and kural.kendi_unvani_mi(cari.unvan, sirket.unvan):
+                cari.unvan = unvan  # karşı firmanın VKN'si eski sürümde bizim adımızla açılmıştı
+            elif (cari.ad_otomatik or kural.kotu_unvan(cari.unvan)) and kural.daha_iyi_unvan(cari.unvan, unvan):
                 cari.unvan = unvan  # eski sürümün yanlış okuduğu ad düzelir; fatura VKN ile aynı cariye bağlı kalır
             return cari, False
     if unvan:

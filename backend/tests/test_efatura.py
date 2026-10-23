@@ -144,7 +144,7 @@ def test_once_xml_sonra_pdf_goruntu_olarak_eklenir():
 
 def test_xml_yonu_vkn_den_bulunur():
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     # Satıcısı biz olan XML "alış" seçiliyken yüklense de satış faturası olur
     f = client.post("/api/faturalar/oku?yon=gelen", files={"dosya": ("s.xml", ubl(satici_vkn="9999999999", alici_vkn="1234567890"),
                                                                    "text/xml")}, headers=h).json()[0]
@@ -155,7 +155,7 @@ def test_xml_yonu_vkn_den_bulunur():
 
 def test_kendi_vkn_cariye_yazilmaz_ve_kotu_ad_duzelir():
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     # Eski sürüm "Ticaret Sicil No" adıyla cari açmış olsun; aynı VKN'li fatura gelince ad düzelir
     c = client.post("/api/cariler", json={"unvan": "Ticaret Sicil No", "vkn": "1234567890"}, headers=h).json()
     f = client.post("/api/faturalar/oku", files={"dosya": ("a.xml", ubl(), "text/xml")}, headers=h).json()[0]
@@ -198,7 +198,7 @@ def test_acilista_eski_yanlis_cari_adi_ve_tek_satir_kalemler_duzelir():
     from app.db import SessionLocal
     from app.models import Fatura, FaturaKalem, Kullanici, Sirket
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     c = client.post("/api/cariler", json={"unvan": "ANKARA Ovecler", "vkn": "1234567890"}, headers=h).json()
     pdf = pdf_olustur(["ORNEK GRUP ELEKTRIK", "TEKS.SAN.TIC.LTD.STI.", "Asagi Ovecler Mah. No:8 / Cankaya /", "ANKARA Ovecler",
                        "VKN: 1234567890", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999", "Fatura No: NVC2026000000009",
@@ -231,7 +231,7 @@ def test_acilista_uydurma_kdvsiz_satirli_faturalar_duzelir():
     from app.db import SessionLocal
     from app.models import Fatura, FaturaKalem, Sirket
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     idler = []
     for no in ("UYD2026000000001", "UYD2026000000002"):
         pdf = pdf_olustur(["ORNEK ELEKTRIK A.S.", "VKN: 3333333333", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999",
@@ -270,7 +270,7 @@ def test_onayli_faturada_eski_okuma_yenilenir_okunamayan_sade_listelenir():
     from app.db import SessionLocal
     from app.models import Fatura, FaturaKalem, Sirket
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     pdf = pdf_olustur(["ORNEK BETON LTD. STI.", "VKN: 4444444444", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999",
                        "Fatura No: HZB2026000000001", "Fatura Tarihi: 06-08-2026",
                        "Sira No Mal Hizmet Miktar Birim Fiyat KDV Orani KDV Tutari Mal Hizmet Tutari",
@@ -368,7 +368,7 @@ def test_acilista_eski_tevkifatli_faturaya_satir_orani_yazilir():
     from app.db import SessionLocal
     from app.models import Fatura, Sirket
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     pdf = pdf_olustur(["ORNEK NAKLIYE LTD. STI.", "VKN: 4444444444", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999",
                        "Fatura No: NAK2026000000002", "Fatura Tarihi: 10-08-2026",
                        "Sira No Mal Hizmet Miktar Birim Fiyat KDV Orani KDV Tutari Mal Hizmet Tutari",
@@ -435,7 +435,7 @@ def test_okuma_hata_raporu_ozet_zip_ve_okunamayan_dosya():
     """Toplu yüklemeden sonra: sorunlu taslaklar kategoriyle, okunamayan dosyalar nedeniyle tek ZIP'te."""
     from openpyxl import load_workbook
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     iyi = pdf_olustur(["ORNEK ELEKTRIK A.S.", "VKN: 3333333333", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999",
                        "Fatura No: IYI2026000000001", "Fatura Tarihi: 06-08-2026",
                        "Sira No Mal Hizmet Miktar Birim Fiyat KDV Orani KDV Tutari Mal Hizmet Tutari",
@@ -474,7 +474,7 @@ def test_acilista_rapordaki_sorunlu_taslaklar_yeniden_okunur():
     from app.db import SessionLocal
     from app.models import Cari, Fatura, Sirket
     h = yeni()
-    client.put("/api/sirket", json={"unvan": "Deneme İnşaat Ltd.", "vkn": "9999999999"}, headers=h)
+    client.put("/api/sirket", json={"unvan": "Başka Firma Ltd.", "vkn": "9999999999"}, headers=h)
     pdf = pdf_olustur(["ORNEK ELEKTRIK A.S.", "VKN: 3333333333", "SAYIN", "DENEME INSAAT LTD", "VKN: 9999999999",
                        "Fatura No: TKR2026000000001", "Fatura Tarihi: 06-08-2026",
                        "Sira No Mal Hizmet Miktar Birim Fiyat KDV Orani KDV Tutari Mal Hizmet Tutari",

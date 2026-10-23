@@ -1640,3 +1640,23 @@ def test_geri_alinan_banka_kesintisi_ve_nottaki_banka():
     assert _koddaki_banka("FAST:AFSA GRUP LTD ŞTİ afsa halkbank akbank gecis", "Akbank") == "Halkbank"
     assert _koddaki_banka("7777/MBL-1-Afsa Grup Ltd Şti-Afsa grup akbanktan", "Akbank") is None
     assert _koddaki_banka("FİRMAMIZ*0010*açıklama", "Akbank") == "Ziraat Bankası"
+
+
+def test_satici_adi_ustte_alici_blogu_arada_vkn_sonra():
+    """Satıcı adı en üstte, altında alıcının adı ve VKN'si, sonra satıcının VKN'si: ad kendisinden sonraki ilk VKN'nin;
+    KDV sütunu olmayan kalem satırı "1 Ton 20.833,33 TL 20.833,33 TL" miktar 1, fiyat 20.833,33 okunur (sentetik)."""
+    metin = "\n".join([
+        "ÖRNEK KONUT İNŞ. SAN. VE TİC. A.Ş.", "KÖRFEZ MAH. DENEME CD.", "İZMİT / KOCAELİ",
+        "DENEME GRUP ENERJİ MÜH.İNŞ.LTD.ŞTİ .", "Örnek mh. No:12", "Merkez / KÜTAHYA",
+        "Vergi Dairesi : 30 AĞUSTOS", "Vergi No : 1111111111", "e-Fatura",
+        "Vergi No : 2222222222", "Vergi Dairesi : ALEMDAR V.D.", "Fatura Tipi : SATIS",
+        "Fatura No : ORN2026000000001", "Fatura Tarihi : 14-08-2026",
+        "No Mal/Hizmet Miktar Birim Fiyat Toplam",
+        "1 HAFRİYAT DÖKÜM BEDELİ 1 Ton 20.833,33 TL 20.833,33 TL",
+        "Mal Hizmet Toplam Tutarı : 20.833,33 TL", "Hesaplanan KDV ( % 20 ) : 4.166,67 TL",
+        "Vergiler Dahil Toplam Tutar : 25.000,00 TL", "Ödenecek Tutar : 25.000,00  TL"])
+    for vkn in ("1111111111", None):
+        r = kural.pdf_fatura_oku(b"", [], "DENEME", vkn, "gelen", metin=metin)
+        assert r["satici"]["unvan"] == "ÖRNEK KONUT İNŞ. SAN. VE TİC. A.Ş." and r["satici"]["vkn"] == "2222222222"
+        k = r["kalemler"][0]
+        assert (k["aciklama"], k["miktar"], k["birim"], k["birim_fiyat"], k["tutar"]) == ("HAFRİYAT DÖKÜM BEDELİ", 1, "Ton", 20833.33, 20833.33)

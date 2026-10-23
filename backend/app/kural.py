@@ -770,6 +770,20 @@ def pdf_taraflari(metin: str) -> tuple[dict, dict]:
                       or (not SIRKET_EKLERI.search(sade(alici["unvan"])) and _KAMU.search(sade(ileri))
                           and not _KAMU.search(sade(alici["unvan"])))):
             alici["unvan"] = ileri
+    if satici["unvan"] and alici["unvan"] == satici["unvan"] and satici["vkn"] != alici["vkn"]:
+        # İki VKN'den geriye yürüyünce aynı ad bulundu (Kent Konut düzeni: satıcı adı en üstte, altında alıcı bloğu ve
+        # onun VKN'si, sonra satıcının VKN'leri). Ad, kendisinden sonraki ilk VKN'nindir; öteki VKN'nin adı belgedeki
+        # başka şirket ekli satırdır. Belgede adı önce yazılan taraf satıcıdır.
+        ad = satici["unvan"]
+        ad_i = next((i for i, sat in enumerate(satirlar) if sat.strip() and sat.strip() in ad), None)
+        sahibi = next((v for v in vknler if ad_i is not None and v[0] > ad_i), None)
+        diger_vkn = next((v for v in vknler if sahibi and v[1] != sahibi[1]), None)
+        diger_i = next((i for i, sat in enumerate(satirlar) if SIRKET_EKLERI.search(sade(sat)) and sat.strip()
+                        and ad_anahtari(sat) != ad_anahtari(ad) and not _ETIKET.search(sade(sat))), None)
+        if sahibi and diger_vkn and diger_i is not None:
+            bir = {"unvan": ad, "vkn": sahibi[1]}
+            iki = {"unvan": satirlar[diger_i].strip(), "vkn": diger_vkn[1]}
+            satici, alici = (iki, bir) if diger_i < ad_i else (bir, iki)
     return satici, alici
 
 
@@ -1192,15 +1206,17 @@ def _tablodan_kalemler(bolum: str, hedefler: list[float], oran: float | None) ->
             bas_n + ara_sutunlar + rf"%\s*(?P<kdv>[\d.,]+)\s+KDV\s+Tutar[ıi]\s*:?\s*(?P<kdvt>[\d.,]+)\s*{_PB}",
             # ... fiyat, %KDV, tutar; KDV tutarı sütunu yok
             bas_n + ara_sutunlar + rf"%\s*(?P<kdv>[\d.,]+)\s+(?P<tut>[\d.,]+)\s*{_PB}(?!\s*(?:%|[\d.,]+\s*{_PB}))",
+            # miktar, birim, fiyat, tutar; KDV sütunu yok: "1 HAFRİYAT BEDELİ 1 Ton 20.833,33 TL 20.833,33 TL"
+            bas_n + rf"(?P<tut>[\d.,]+)\s*{_PB}(?!\s*(?:%|[\d.,]+\s*{_PB}))",
             # miktar, birim, tutar; fiyat ve KDV sütunu yok (akaryakıt): fiyat = tutar / miktar
-            rf"(?<![\d.,]){n}\s+(?P<ac>.{{1,400}}?)\s+(?P<mik>\d[\d.,]*)\s*(?P<bir>{_BIRIM_KODU}|[A-Za-zÇĞİÖŞÜçğıöşü]+\.?)\s+"
+            rf"(?<![\d.,]){n}\s+(?P<ac>.{{1,400}}?)\s+(?P<mik>\d[\d.,]*)\s*(?P<bir>(?!(?:TL|TRY)\b){_BIRIM_KODU}|(?!(?:TL|TRY)\b)[A-Za-zÇĞİÖŞÜçğıöşü]+\.?)\s+"
             rf"(?P<tut>[\d.,]+)\s*{_PB}(?!\s*(?:%|[\d.,]+\s*{_PB}))",
             # KDV oranı sütunu yok: fiyat, İskonto1 %, [İskonto2 %], net birim fiyat, net tutar, KDV tutarı, KDV'li net tutar
             bas_n + rf"(?:%\s*(?P<iskor>[\d.,]+)\s+)?(?:%\s*[\d.,]+\s+)?(?:[\d.,]+\s*(?:{_PB}\s+|\s))?"
                     rf"(?P<tut>[\d.,]+)\s*{_PB}\s+(?P<kdvt>[\d.,]+)\s*{_PB}\s+(?P<brt>[\d.,]+)\s*{_PB}",
         ]
         adaylar = [(m.start(), not _satir_tutarli(m), i, m) for i, d in enumerate(desenler)
-                   for m in [re.compile(d, re.IGNORECASE).search(bolum, konum)] if m and (i < 5 or _satir_tutarli(m))]
+                   for m in [re.compile(d, re.IGNORECASE).search(bolum, konum)] if m and (i < 6 or _satir_tutarli(m))]
         # Aynı yerde birden çok düzen uyarsa rakamları kendi içinde tutan (miktar x fiyat = tutar), o da yoksa ilk düzen
         m = min(adaylar, key=lambda x: x[:3])[3] if adaylar else None
         if not m:
