@@ -23,7 +23,7 @@ AYAR = VERI_KLASORU / "whatsapp-bot.json"   # {"acik": true}
 ANAHTAR = secrets.token_hex(24)
 ANA_ADRES = os.environ.get("MUHASEBE_BOT_ADRES", "http://127.0.0.1:" + os.environ.get("MUHASEBE_PORT", "8000"))
 
-DURUM: dict = {"durum": "kapali", "qr": None, "numara": None, "hata": None, "zaman": 0.0}
+DURUM: dict = {"durum": "kapali", "qr": None, "numara": None, "hata": None, "zaman": 0.0, "gruplar": []}  # gruplar: botun içinde olduğu gruplar
 KURULUM: dict = {"durum": None, "hata": None}
 MESAJLAR: list[dict] = []  # son gelen yazılar ve ne yapıldığı (ekranda; listede olmayan kişi "Ekle" ile eklenir)
 _SUREC: dict = {"p": None}
@@ -40,9 +40,13 @@ def ayarlar() -> dict:
 VARSAYILAN_GRUP = "YapayZeka Destekli Muhasebe"
 
 
-def izinli_grup() -> str:
-    """Botun cevap verdiği tek WhatsApp grubu (adıyla). Başka grup ve özel sohbetlere hiç cevap verilmez."""
-    return ayarlar().get("grup") or VARSAYILAN_GRUP
+def izinli_gruplar() -> list[str]:
+    """Botun cevap verdiği WhatsApp grupları (adlarıyla; ekranda seçilir). Başka gruplara ve özel sohbetlere hiç
+    cevap verilmez. Seçilmemişse yalnız varsayılan grup."""
+    a = ayarlar()
+    if isinstance(a.get("gruplar"), list):
+        return a["gruplar"]
+    return [a.get("grup") or VARSAYILAN_GRUP]
 
 
 def ayar_yaz(**degerler) -> None:

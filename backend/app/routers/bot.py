@@ -39,6 +39,7 @@ class KopruDurumu(BaseModel):
     qr: str | None = None       # QR resmi (data:image/png;base64,...)
     numara: str | None = None
     hata: str | None = None
+    gruplar: list[str] | None = None  # botun içinde olduğu grupların adları
 
 
 def _numara_cikis(n: BotNumarasi) -> dict:
@@ -98,7 +99,7 @@ def sor(metin: str, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_
 
 def _durum() -> dict:
     return {**bot.DURUM, "acik": bool(bot.ayarlar().get("acik")), "calisiyor": bot.calisiyor_mu(),
-            "kurulu": bot.kurulu_mu(), "grup": bot.izinli_grup(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "mesajlar": bot.MESAJLAR}
+            "kurulu": bot.kurulu_mu(), "izinli_gruplar": bot.izinli_gruplar(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "mesajlar": bot.MESAJLAR}
 
 
 @router.get("/durum")
@@ -107,14 +108,12 @@ def durum(k: Kullanici = Depends(sahip)):
 
 
 class AyarGiris(BaseModel):
-    grup: str
+    gruplar: list[str]
 
 
 @router.put("/ayar")
 def ayar(veri: AyarGiris, k: Kullanici = Depends(sahip)):
-    if not veri.grup.strip():
-        raise HTTPException(422, "Grup adı gerekli.")
-    bot.ayar_yaz(grup=veri.grup.strip())
+    bot.ayar_yaz(gruplar=[g.strip() for g in veri.gruplar if g.strip()])
     return _durum()
 
 
@@ -166,6 +165,8 @@ def kopru_durum(veri: KopruDurumu, _: None = Depends(kopru)):
     bot.DURUM.update(durum=veri.durum, qr=veri.qr if veri.durum == "qr" else None, hata=veri.hata)
     if veri.numara:
         bot.DURUM["numara"] = bot.rakamlar(veri.numara)
+    if veri.gruplar is not None:
+        bot.DURUM["gruplar"] = sorted(set(veri.gruplar), key=kural.tr_sira)
     if veri.durum == "cikis":  # telefondan "bağlı cihazlar"dan çıkarıldı: yeni QR için oturum silinir
         import shutil
         shutil.rmtree(bot.OTURUM, ignore_errors=True)
@@ -178,10 +179,10 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     adaylar = {bot.rakamlar(x) for x in (veri.gonderen, veri.gonderen_alt) if x} - {""}
     if not adaylar:
         return {"cevap": None}
-    # Yalnız izinli gruptaki yazılara cevap verilir; özel sohbet ve başka gruplara hiçbir şey yazılmaz
-    if not veri.grup or kural.ad_anahtari(veri.grup) != kural.ad_anahtari(bot.izinli_grup()):
+    # Yalnız seçilen gruplardaki yazılara cevap verilir; özel sohbet ve başka gruplara hiçbir şey yazılmaz
+    if not veri.grup or kural.ad_anahtari(veri.grup) not in {kural.ad_anahtari(g) for g in bot.izinli_gruplar()}:
         bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin,
-                         f"Cevap verilmedi: {'özel sohbet' if not veri.grup else 'başka grup (' + veri.grup + ')'}", tanindi=True)
+                         f"Cevap verilmedi: {'özel sohbet' if not veri.grup else 'seçilmemiş grup (' + veri.grup + ')'}", tanindi=True)
         return {"cevap": None}
     kayit = db.scalars(select(BotNumarasi).where(BotNumarasi.aktif.is_(True))
                        .where((BotNumarasi.telefon.in_(adaylar)) | (BotNumarasi.kimlik.in_(adaylar)))).first()

@@ -135,7 +135,12 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "banka bakiyeleri"}).json()["cevap"] is None
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "banka bakiyeleri",
                                                        "grup": "Aile"}).json()["cevap"] is None
-        assert bot.MESAJLAR[-1]["sonuc"].startswith("Cevap verilmedi: başka grup")
+        assert bot.MESAJLAR[-1]["sonuc"].startswith("Cevap verilmedi: seçilmemiş grup")
+        # Ekrandan başka grup da seçilebilir
+        assert client.put("/api/bot/ayar", json={"gruplar": ["YapayZeka Destekli Muhasebe", "Aile"]}, headers=h).status_code == 200
+        assert "Halkbank" in client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "banka bakiyeleri",
+                                                                     "grup": "aile"}).json()["cevap"]
+        client.put("/api/bot/ayar", json={"gruplar": ["YapayZeka Destekli Muhasebe"]}, headers=h)
     finally:
         R.YEREL.discard("testclient")
 

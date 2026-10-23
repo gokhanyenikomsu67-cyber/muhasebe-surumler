@@ -80,6 +80,17 @@ async function grupAdi(sock, jid) {
   }
 }
 
+// Botun içinde olduğu grupların adları (ekranda hangilerine cevap verileceği seçilir)
+async function grupListesi(sock) {
+  try {
+    const hepsi = await sock.groupFetchAllParticipating()
+    for (const [jid, g] of Object.entries(hepsi)) gruplar.set(jid, g.subject)
+    return Object.values(hepsi).map((g) => g.subject).filter(Boolean)
+  } catch {
+    return null
+  }
+}
+
 async function baglan() {
   const { state, saveCreds } = await useMultiFileAuthState(OTURUM)
   let version
@@ -91,6 +102,10 @@ async function baglan() {
     syncFullHistory: false, ...(version ? { version } : {})
   })
   sock.ev.on('creds.update', saveCreds)
+  // Gruba eklenince, çıkarılınca ya da grup adı değişince liste yenilenir
+  const grupYenile = async () => { gruplar.clear(); await durumBildir(sonDurum, { gruplar: await grupListesi(sock) }) }
+  sock.ev.on('groups.upsert', grupYenile)
+  sock.ev.on('groups.update', grupYenile)
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -99,7 +114,7 @@ async function baglan() {
     }
     if (connection === 'open') {
       sonDurum = 'bagli'
-      await durumBildir('bagli', { numara: sock.user?.id || null })
+      await durumBildir('bagli', { numara: sock.user?.id || null, gruplar: await grupListesi(sock) })
     } else if (connection === 'close') {
       const kod = lastDisconnect?.error?.output?.statusCode
       if (kod === DisconnectReason.loggedOut) {
