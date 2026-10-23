@@ -453,14 +453,17 @@ const topluDurum = (yol, durum) => async (sec) => {
   await api(yol, { metod: "POST", veri: { idler: sec.map((x) => x.id), durum } });
   bildir(`${sec.length} kayıt ${durum === "pasif" ? "pasif yapıldı; seçim listelerinde görünmez" : "yeniden aktif"}.`);
 };
+// "Pasifleri göster" işaretliyken yalnız pasifler, işaretsizken yalnız aktifler listelenir
 const pasifSuzgeci = (durumu, yenile) => h("label", { style: "font-size:13px" },
-  h("input", { type: "checkbox", checked: durumu.pasifler, onchange: (e) => { durumu.pasifler = e.target.checked; yenile(); } }), " Pasifleri de göster");
+  h("input", { type: "checkbox", checked: durumu.gorunum === "pasif", onchange: (e) => { durumu.gorunum = e.target.checked ? "pasif" : "aktif"; yenile(); } }), " Pasifleri göster");
+const listeDurumu = (ad) => ({ ad, gorunum: "aktif" });
+const durumaGore = (durumu, x) => (durumu.gorunum === "pasif" ? !aktifMi(x) : aktifMi(x));
 
 function santiyeListesiAc() {
-  const durumu = { pasifler: false };
+  const durumu = listeDurumu("santiyeler");
   sekmeAc("santiyeler", "Şantiyeler", listeEkrani({
     baslik: "Şantiyeler",
-    kaynak: async () => (await api("/api/santiyeler")).filter((x) => durumu.pasifler || aktifMi(x)),
+    kaynak: async () => (await api("/api/santiyeler")).filter((x) => durumaGore(durumu, x)),
     ustAlan: (yenile) => pasifSuzgeci(durumu, yenile),
     kolonlar: [
       { alan: "ad", baslik: "Şantiye" },
@@ -583,10 +586,10 @@ function depoSecimi() {
 }
 
 function depoListesiAc() {
-  const durumu = { pasifler: false };
+  const durumu = listeDurumu("depolar");
   sekmeAc("depolar", "Depolar", listeEkrani({
     baslik: "Depolar (taşeronlar)",
-    kaynak: async () => (await api("/api/depolar")).filter((x) => durumu.pasifler || aktifMi(x)),
+    kaynak: async () => (await api("/api/depolar")).filter((x) => durumaGore(durumu, x)),
     kolonlar: [
       { alan: "ad", baslik: "Depo" }, { alan: "santiye_ad", baslik: "Şantiye" },
       { alan: "cari_unvan", baslik: "Borç yazılan cari" },
