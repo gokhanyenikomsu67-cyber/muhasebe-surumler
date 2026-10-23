@@ -1992,6 +1992,7 @@ _ETTN = re.compile(r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 # "Kredi", "EDENRED" gibi kelimelerin içi sayılmaz: tam kelime ya da satırın tamamı aranır.
 _RED_YAZISI = re.compile(r"\b(?:reddedildi|reddedilmistir|reddedilen fatura|red edildi|red edilmistir|"
                          r"iptal edildi|iptal edilmistir|iptal edilen fatura)\b")
+_RED_BASKASI = re.compile(r"\b(?:fis|fisi|fisler|fisleri|irsaliye\w*|siparis\w*|makbuz\w*|istinaden\w*|siparisi)\b")
 _RED_SATIRI = re.compile(r"^(?:red|ret|iptal|reddedildi|iptal edildi|reddedilmistir|iptal edilmistir)[.!]?$")
 
 
@@ -2003,10 +2004,14 @@ def ettn_bul(metin: str) -> str | None:
 
 def red_isareti(metin: str) -> bool:
     """Faturanın üstünde reddedildiğini / iptal edildiğini söyleyen yazı ya da damga var mı."""
-    s = sade(metin or "")
-    if _RED_YAZISI.search(s):
-        return True
-    return any(_RED_SATIRI.match(sade(sa)) for sa in (metin or "").splitlines())
+    for sa in (metin or "").splitlines():
+        sa = sade(sa)
+        if _RED_SATIRI.match(sa):
+            return True
+        # "Bu faturaya istinaden 1 adet yazarkasa fişi iptal edilmiştir": iptal edilen fatura değil, fiş
+        if any(not _RED_BASKASI.search(sa[:m.start()]) for m in _RED_YAZISI.finditer(sa)):
+            return True
+    return bool(_RED_YAZISI.search(sade(" ".join((metin or "").split()))) and not _RED_BASKASI.search(sade(metin or "")))
 
 
 _RED_KODLARI = {"red", "ret", "rejected", "reject", "reddedildi", "iptal"}
