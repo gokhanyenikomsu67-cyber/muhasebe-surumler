@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import bot, soru
+from .. import bot, kural, soru
 from ..auth import aktif_kullanici
 from ..db import get_db
 from ..models import BotNumarasi, Kullanici
@@ -98,11 +98,23 @@ def sor(metin: str, db: Session = Depends(get_db), k: Kullanici = Depends(aktif_
 
 def _durum() -> dict:
     return {**bot.DURUM, "acik": bool(bot.ayarlar().get("acik")), "calisiyor": bot.calisiyor_mu(),
-            "kurulu": bot.kurulu_mu(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "mesajlar": bot.MESAJLAR}
+            "kurulu": bot.kurulu_mu(), "grup": bot.izinli_grup(), "windows": os.name == "nt", "kurulum": bot.KURULUM, "mesajlar": bot.MESAJLAR}
 
 
 @router.get("/durum")
 def durum(k: Kullanici = Depends(sahip)):
+    return _durum()
+
+
+class AyarGiris(BaseModel):
+    grup: str
+
+
+@router.put("/ayar")
+def ayar(veri: AyarGiris, k: Kullanici = Depends(sahip)):
+    if not veri.grup.strip():
+        raise HTTPException(422, "Grup adı gerekli.")
+    bot.ayar_yaz(grup=veri.grup.strip())
     return _durum()
 
 
@@ -166,13 +178,17 @@ def mesaj(veri: KopruMesaji, _: None = Depends(kopru), db: Session = Depends(get
     adaylar = {bot.rakamlar(x) for x in (veri.gonderen, veri.gonderen_alt) if x} - {""}
     if not adaylar:
         return {"cevap": None}
+    # Yalnız izinli gruptaki yazılara cevap verilir; özel sohbet ve başka gruplara hiçbir şey yazılmaz
+    if not veri.grup or kural.ad_anahtari(veri.grup) != kural.ad_anahtari(bot.izinli_grup()):
+        bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin,
+                         f"Cevap verilmedi: {'özel sohbet' if not veri.grup else 'başka grup (' + veri.grup + ')'}", tanindi=True)
+        return {"cevap": None}
     kayit = db.scalars(select(BotNumarasi).where(BotNumarasi.aktif.is_(True))
                        .where((BotNumarasi.telefon.in_(adaylar)) | (BotNumarasi.kimlik.in_(adaylar)))).first()
     if not kayit or not kayit.kullanici:
         bot.mesaj_kaydet(veri.gonderen, veri.gonderen_alt, veri.ad, veri.metin, "Cevap verilmedi: kişi listede yok", tanindi=False)
-        # Bota doğrudan yazdıysa neden cevap alamadığını bilsin (bilgi verilmez)
-        return {"cevap": "Bu numaraya cevap verme iznim yok. Programda Araçlar > WhatsApp Botu ekranından eklenmeniz gerekiyor."
-                if veri.hitap else None}
+        # Listede olmayan kişiye hiçbir şey yazılmaz (bot numarasına dışarıdan da yazılabilir); yalnız ekranda görünür
+        return {"cevap": None}
     # Grupta numara yerine gizli kimlik (@lid) gelir: numarasıyla tanınan kişinin kimliği öğrenilir
     lid = next((bot.rakamlar(y) for y in (veri.gonderen, veri.gonderen_alt) if y and y.endswith("@lid")), None)
     if lid and kayit.kimlik != lid:

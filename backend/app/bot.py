@@ -37,6 +37,14 @@ def ayarlar() -> dict:
         return {}
 
 
+VARSAYILAN_GRUP = "YapayZeka Destekli Muhasebe"
+
+
+def izinli_grup() -> str:
+    """Botun cevap verdiği tek WhatsApp grubu (adıyla). Başka grup ve özel sohbetlere hiç cevap verilmez."""
+    return ayarlar().get("grup") or VARSAYILAN_GRUP
+
+
 def ayar_yaz(**degerler) -> None:
     a = {**ayarlar(), **degerler}
     AYAR.write_text(json.dumps(a, ensure_ascii=False), encoding="utf-8")

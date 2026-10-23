@@ -4339,12 +4339,16 @@ function whatsappBotuAc() {
           h("p", {}, d.durum === "bagli" ? "Henüz mesaj gelmedi. Denemek için grupta \"yardım\" yazın." : "Bot bağlı değil."),
         d.mesajlar.length ? h("button", { class: "dugme", onclick: () => yenidenCiz() }, "Yenile") : "");
 
-      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "WhatsApp Botu")), durumKutusu, qr,
+      const grupKutusu = h("input", { value: d.grup, style: "min-width:260px" });
+      const grupSatiri = h("div", { class: "liste-ust" }, h("b", {}, "Cevap verilecek grup:"), grupKutusu,
+        h("button", { class: "dugme", onclick: () => islem(() => api("/api/bot/ayar", { metod: "PUT", veri: { grup: grupKutusu.value } }), "Grup kaydedildi.") }, "Kaydet"),
+        h("small", {}, "Bot yalnız bu gruptaki yazılara cevap verir; özel mesajlara ve başka gruplara hiçbir şey yazmaz."));
+      el.append(h("div", { class: "liste-ust" }, h("h2", {}, "WhatsApp Botu")), durumKutusu, qr, grupSatiri,
         h("h3", {}, "Soru sorabilecek kişiler"),
         h("div", { class: "tablo-kap" }, h("table", { class: "liste" },
           h("thead", {}, h("tr", {}, ["Ad", "Telefon", "Yetkisi", "Durum", ""].map((b) => h("th", {}, b)))), h("tbody", {}, satirlar))),
         form, gelenler,
-        ACIKLAMA("Bot için ayrı bir hat kullanın ve bu numarayı WhatsApp grubunuza ekleyin. Program açıkken bot, listedeki kişilerin sorularına (ör. \"GEBZE şantiye harcaması\", \"ABC bakiye\", \"bu hafta çekler\", \"banka bakiyeleri\", \"yardım\") programdaki verilerle cevap verir. Bot yalnız bilgi verir, hiçbir kaydı değiştirmez; kişi, seçilen kullanıcının göremediği bölümü soramaz. Cevaplar WhatsApp üzerinden gider. Bu yol WhatsApp'ın resmi iş yolu değildir; ana hattınızı kullanmayın."));
+        ACIKLAMA("Bot için ayrı bir hat kullanın ve bu numarayı WhatsApp grubunuza ekleyin. Program açıkken bot, yukarıda adı yazan gruptaki listedeki kişilerin sorularına (ör. \"GEBZE şantiye harcaması\", \"ABC bakiye\", \"bu hafta çekler\", \"banka bakiyeleri\", \"yardım\") programdaki verilerle cevap verir. Bot yalnız bilgi verir, hiçbir kaydı değiştirmez; kişi, seçilen kullanıcının göremediği bölümü soramaz. Cevaplar WhatsApp üzerinden gider. Bu yol WhatsApp'ın resmi iş yolu değildir; ana hattınızı kullanmayın."));
       // QR ve bağlantı durumu değiştikçe ekran kendini yeniler
       if (["qr", "baslatiliyor", "baglaniyor"].includes(d.durum) || d.kurulum?.durum === "kuruluyor") {
         const once = JSON.stringify([d.durum, d.qr, d.kurulum?.durum]);

@@ -135,10 +135,11 @@ async function baglan() {
         if (!alt && gonderen.endsWith('@lid')) {
           try { alt = await sock.signalRepository?.lidMapping?.getPNForLID(gonderen) } catch { /* bulunamadı */ }
         }
-        // Bota yazıldı mı: @bahsedildi ya da botun mesajına yanıt verildi (özel mesaj her zaman bota yazılmıştır)
+        // Bota yazıldı mı: grupta @bahsedildi ya da botun mesajına yanıt verildi. Özel sohbette yalnız tanınan soruya
+        // cevap verilir (hitap sayılmaz), "anlayamadım" yazılmaz
         const benim = new Set([kimlikNo(sock.user?.id), kimlikNo(sock.user?.lid)].filter(Boolean))
         const b = baglam(m)
-        const hitap = !grup || (b.mentionedJid || []).some((j) => benim.has(kimlikNo(j))) || benim.has(kimlikNo(b.participant))
+        const hitap = grup && ((b.mentionedJid || []).some((j) => benim.has(kimlikNo(j))) || benim.has(kimlikNo(b.participant)))
         const metin = hamMetin.replace(/@\d+/g, ' ').replace(/\s+/g, ' ').trim()
         if (!metin) continue
         const { cevap } = await programa('mesaj', {
