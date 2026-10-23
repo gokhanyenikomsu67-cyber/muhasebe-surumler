@@ -18,10 +18,37 @@ def var_mi() -> bool:
     return True
 
 
+_ONBELLEK: dict[tuple[str, bool], dict | None] = {}
+
+
 def oku(veri: bytes, pdf: bool) -> dict | None:
-    """Sayfalardaki GİB karekodunun içeriği (sözlük) ya da None."""
+    """Sayfalardaki GİB karekodunun içeriği (sözlük) ya da None. Aynı belge bir yüklemede birkaç kez sorulur (yön, karşı
+    taraf); son belgelerin sonucu saklanır."""
     if not var_mi():
         return None
+    import hashlib
+    anahtar = (hashlib.sha1(veri).hexdigest(), pdf)
+    if anahtar not in _ONBELLEK:
+        if len(_ONBELLEK) > 16:
+            _ONBELLEK.clear()
+        _ONBELLEK[anahtar] = _oku(veri, pdf)
+    return _ONBELLEK[anahtar]
+
+
+def yonu(k: dict | None, sirket_vkn: str | None) -> str | None:
+    """Karekoddaki taraflara göre yön: alıcı bizsek alış (gelen), satıcı bizsek satış (giden)."""
+    vkn = "".join(c for c in str(sirket_vkn or "") if c.isdigit())
+    if not (k and vkn):
+        return None
+    satici, alici = (("".join(c for c in str(k.get(a) or "") if c.isdigit())) for a in ("vkntckn", "avkntckn"))
+    if alici == vkn and satici != vkn:
+        return "gelen"
+    if satici == vkn and alici != vkn:
+        return "giden"
+    return None
+
+
+def _oku(veri: bytes, pdf: bool) -> dict | None:
     import zxingcpp
 
     from .ocr import _goruntuler

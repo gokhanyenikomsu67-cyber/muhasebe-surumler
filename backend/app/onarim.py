@@ -19,11 +19,11 @@ import re
 
 from sqlalchemy import select
 
-from . import kural, schemas
+from . import karekod, kural, schemas
 from .db import VERI_KLASORU, SessionLocal
 from .models import Cari, Fatura, Sirket
 
-SURUM = 15
+SURUM = 16
 UYDURMA_SATIR = "KDV'siz / istisna tutar"  # eski sürüm toplam farkını bu satırla kapatıyordu
 RAPOR = VERI_KLASORU / "onarim-raporu.json"
 
@@ -33,13 +33,13 @@ def _vkn(x) -> str:
 
 
 def _pdf_oku(f: Fatura, sirket: Sirket, resimle: bool = False) -> dict | None:
-    from .routers.faturalar import DOSYA_KLASORU
+    from .routers.faturalar import DOSYA_KLASORU, karsi_tarafi_karekoddan
     if not (f.kaynak_dosya or "").endswith(".pdf"):
         return None
     try:
         from . import ocr
         veri = (DOSYA_KLASORU / f.kaynak_dosya).read_bytes()
-        okunan = kural.pdf_fatura_oku(veri, [], sirket.unvan, sirket.vkn, f.yon)
+        okunan = karsi_tarafi_karekoddan(kural.pdf_fatura_oku(veri, [], sirket.unvan, sirket.vkn, f.yon), veri, sirket, f.yon)
         # Sorunlu taslakta kalemler yazıdan okunamazsa sayfa resminden de denenir (yavaş, yalnız orada)
         return ocr.pdf_kalemlerini_tamamla(okunan, veri, [], sirket.unvan, sirket.vkn, f.yon) if resimle else okunan
     except Exception:  # noqa: BLE001  okunamayan belge onarımı durdurmasın
@@ -350,7 +350,8 @@ def _yonu_duzelt(db, sirket: Sirket) -> list[str]:
         if f.xml_dosya or not (f.kaynak_dosya or "").endswith(".pdf"):
             continue
         try:
-            dogru = kural.pdf_yonu((DOSYA_KLASORU / f.kaynak_dosya).read_bytes(), sirket.vkn)
+            veri = (DOSYA_KLASORU / f.kaynak_dosya).read_bytes()
+            dogru = kural.pdf_yonu(veri, sirket.vkn, lambda: karekod.yonu(karekod.oku(veri, True), sirket.vkn))
         except OSError:
             continue
         if not dogru or dogru == f.yon:

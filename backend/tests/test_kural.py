@@ -1569,3 +1569,24 @@ def test_sema_surumlu_guncelleme_once_yedek_alir(tmp_path, monkeypatch):
     import sqlite3
     yedek = next((tmp_path / "yedekler").glob("sema-99-oncesi-*.db"))
     assert sqlite3.connect(yedek).execute("SELECT unvan FROM sirketler").fetchone()[0] == "ARMA"
+
+
+def test_pdf_yonu_ust_vkn_bizim_karsi_firma_unvanli_alis():
+    """Bizim VKN'miz adımız yazılmadan en üstte (müşteri bilgisi), karşı firma ünvanı ve VKN'siyle: alış faturası."""
+    v = pdf_olustur(["Musteri No: 12345", "Vergi No: 9999999999", "ORNEKNET ANONIM SIRKETI", "Vergi Numarasi: 1234567890",
+                     "Fatura No: ORN2026000000001", "Fatura Tarihi: 31-08-2026", "ODENECEK TUTAR : 120,00 TL"])
+    assert kural.pdf_yonu(v, "9999999999") == "gelen"
+    # Karekod varsa karar ondan: satıcı VKN'si bizimse satış
+    assert kural.pdf_yonu(v, "9999999999", lambda: "giden") == "giden"
+
+
+def test_bosluklu_ve_bitisik_vkn_okunur():
+    r = _oku(["ORNEK TICARET A.S.", "VKN: 123 456 7890", "SAYIN", "DENEME INSAAT LTD STI", "VKN: 9999999999TICARETSICILNO 55",
+              "Fatura No: ORN2026000000001", "Fatura Tarihi: 31-08-2026", "Mal Hizmet Toplam Tutari 100,00",
+              "Hesaplanan KDV (%20) 20,00", "Odenecek Tutar 120,00"])
+    assert r["satici"]["vkn"] == "1234567890"
+
+
+def test_alt_alta_kdv_etiketleri_tutarlariyla_eslesir():
+    metin = kural._alt_alta_etiketler("Hesaplanan KDV %1\nHesaplanan KDV %10\n0,20 TRY\n80,00 TRY\nOdenecek Tutar 900,20")
+    assert metin.splitlines()[:2] == ["Hesaplanan KDV %1 0,20 TRY", "Hesaplanan KDV %10 80,00 TRY"]

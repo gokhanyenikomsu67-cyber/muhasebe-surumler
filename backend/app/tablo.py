@@ -377,6 +377,9 @@ def _tablo_satirlari(veri: bytes, yazidan: bool = False) -> list[dict] | None:
     return kalemler or None
 
 
+_ALT_BILGI = re.compile(r"^yalniz\b|\b(?:ara toplam|genel toplam|kdv matrahi|odenecek tutar|vergiler dahil|toplam tutar)\b")
+
+
 def tablodan_kalemler(veri: bytes, hedefler: list[float | None], oran: float | None = None,
                       genel: float | None = None, kdv: float | None = None, yazidan: bool = False) -> list[dict] | None:
     """yazidan=True: çizgili tablo yoksa başlık satırı yazıda aranır (öteki okuma yöntemleri sonuç vermediğinde)."""
@@ -384,6 +387,9 @@ def tablodan_kalemler(veri: bytes, hedefler: list[float | None], oran: float | N
     satirlar = _tablo_satirlari(veri, yazidan)
     if not satirlar:
         return None
+    # Tablonun içine düşmüş alt bilgi satırı ("Yalnız : #sekizbin...", "Ara Toplam / KDV Matrahı") kalem değildir
+    satirlar = [d for d in satirlar if _kalem(d, oran) or not _ALT_BILGI.search(sade(" ".join(
+        str(x) for v in d.values() for x in (v if isinstance(v, list) else [v]) if x)))]
     sonuc = [k for k in (_kalem(d, oran) for d in satirlar) if k]
     if not sonuc or len(sonuc) != len(satirlar):
         return None
