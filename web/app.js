@@ -3379,6 +3379,9 @@ function topluCekAc(yon = "alinan") {
           ekle(r.satirlar);
           bildir(`${r.satirlar.length} çek tabloya alındı.` + (r.atlanan ? ` ${r.atlanan} satır öteki yönde (${yon === "alinan" ? "verilen" : "alınan"}) olduğu için alınmadı.` : "")
             + (r.toplam_satiri ? ` Excel'deki ${r.toplam_satiri} toplam satırı çek sayılmadı.` : ""));
+          if (r.akinsoft && r.atlanan) alert(`Akınsoft çek raporu okundu: ${r.satirlar.length} ${yon === "alinan" ? "alınan" : "verilen"} çek tabloya geldi.\n\n`
+            + `Dosyadaki ${r.atlanan} ${yon === "alinan" ? "verilen (kendi)" : "alınan (müşteri)"} çek için bunları kaydettikten sonra üstteki "Çekler" kutusundan `
+            + `${yon === "alinan" ? "Verilen" : "Alınan"} çekleri seçip aynı dosyayı yeniden yükleyin.` + (r.yeni_hesap?.length ? `\n\nBanka hesabı açıldı: ${r.yeni_hesap.join(", ")} (ekstresi yüklenince IBAN'ı eklenir).` : ""));
           if (r.uyari) alert(r.uyari);
         } catch (err) { bildir(err.message, true); }
       } });
@@ -3460,6 +3463,7 @@ function topluCekAc(yon = "alinan") {
       // Ödendi / tahsil edildi: vade geçmişse vade günü, değilse bugün; ciro, takas, teminat: alış tarihi
       const akibetTarihi = (x) => {
         const bugunT = bugun(), vade = tarihCoz(x.vade);
+        if (x.akibet?.tarih) return x.akibet.tarih;  // Akınsoft raporundaki işlem (ödeme/tahsil) tarihi
         if (/^(tahsil|ode)/.test(x.akibet?.islem || "")) return vade && vade < bugunT ? vade : bugunT;
         return tarihCoz(x.alis_tarihi) || bugunT;
       };

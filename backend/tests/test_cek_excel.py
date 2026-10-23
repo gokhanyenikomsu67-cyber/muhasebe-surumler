@@ -67,3 +67,55 @@ def test_toplu_cekte_cari_durumu_kayitli_yeni_benzer():
     assert d[1]["durum"] == "yeni" and d[1]["benzer"][0]["id"] == benzer["id"]
     assert d[2]["durum"] == "yok"  # lehtar firmamızsa cari belli değil
     assert (d[3]["durum"], d[3]["benzer"]) == ("yeni", [])
+
+
+def test_akinsoft_cek_raporu():
+    """Akınsoft çek raporu olduğu gibi okunur: yalnız gerekli sütunlar alınır, evrak durumu akıbet olur (sentetik veri)."""
+    from datetime import datetime
+    r = client.post("/api/kayit", json={"sirket_unvan": "DENEME", "ad": "x", "eposta": f"{uuid.uuid4().hex}@ornek.com", "sifre": "gizli123"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    baslik = ["Kayıt Tarihi", "Kayıt Saati", "Evrak Türü", "Evrak Durumu", "Banka Durumu", "Vadesi", "Vadesi", "Vade Günü", "Kalan Vade",
+              "Evrak No", "KPB Tutarı", "Kalan Tutar", "Gl.Cari Kodu", "Gl.Ticari Unvanı", "Gl.Adı Soyadı", "Gd.Cari Kodu",
+              "Gd.Ticari Unvanı", "Gd.Adı Soyadı", "Ödendiği Tarih", "Ödendiği Tarih", "Evrak bankası", "Banka Şubesi",
+              "IBAN/Hesap No", "Keşide Yeri", "Takas Banka", "Asıl Borçlu Ünvanı", "Özel Kodu 1", "Kaydeden"]
+    g = lambda s: datetime.strptime(s, "%d.%m.%Y")  # noqa: E731
+    bos = [None] * len(baslik)
+
+    def satir(**d):
+        x = list(bos)
+        for ad, v in d.items():
+            x[baslik.index(ad)] = v
+        return x
+    wb = Workbook()
+    ws = wb.active
+    ws.append(baslik)
+    for x in [
+        satir(**{"Kayıt Tarihi": g("01.01.2025"), "Evrak Türü": "Kendi Çekim", "Evrak Durumu": "Bankadan Ödendi", "Vadesi": g("01.02.2025"),
+                 "Evrak No": 11, "KPB Tutarı": 1000, "Gd.Ticari Unvanı": "ÖRNEK TEDARİK LTD.", "Ödendiği Tarih": g("03.02.2025"),
+                 "Evrak bankası": "HALKBANK VADESİZ 10000001", "IBAN/Hesap No": 10000001}),
+        satir(**{"Kayıt Tarihi": g("01.01.2025"), "Evrak Türü": "Kendi Çekim", "Evrak Durumu": "Ödenmedi", "Vadesi": g("01.05.2027"),
+                 "Evrak No": "0000012", "KPB Tutarı": 2000, "Gd.Ticari Unvanı": " ", "Gd.Adı Soyadı": "ÖRNEK USTA",
+                 "Evrak bankası": "HALKBANK VADESİZ 10000001"}),
+        satir(**{"Kayıt Tarihi": g("02.01.2025"), "Evrak Türü": "Müşteri Çeki", "Evrak Durumu": "Ciro Edildi", "Vadesi": g("01.03.2025"),
+                 "Evrak No": 7000001, "KPB Tutarı": 3000, "Gl.Ticari Unvanı": "ÖRNEK MÜŞTERİ A.Ş.", "Gd.Ticari Unvanı": "ÖRNEK TEDARİK LTD.",
+                 "Evrak bankası": "AKBANK"}),
+        satir(**{"Kayıt Tarihi": g("02.01.2025"), "Evrak Türü": "Müşteri Çeki", "Evrak Durumu": "Takasta", "Banka Durumu": "Tahsil Edildi",
+                 "Vadesi": g("01.04.2025"), "Evrak No": 7000002, "KPB Tutarı": 4000, "Gl.Ticari Unvanı": "ÖRNEK MÜŞTERİ A.Ş.",
+                 "Ödendiği Tarih": g("02.04.2025"), "Evrak bankası": "YAPI KREDİ", "Takas Banka": "ZİRAAT VADESİZ - VADESİZ - TL",
+                 "Asıl Borçlu Ünvanı": "ÖRNEK ÇEKİ YAZAN"}),
+    ]:
+        ws.append(x)
+    t = io.BytesIO()
+    wb.save(t)
+    v = client.post("/api/excel/cekler/onizle?yon=verilen", files={"dosya": ("c.xlsx", t.getvalue())}, headers=h).json()
+    assert (len(v["satirlar"]), v["atlanan"], v["akinsoft"]) == (2, 2, True)
+    s1, s2 = v["satirlar"]
+    assert (s1["cek_no"], s1["tutar"], s1["vade"], s1["cari_unvan"], s1["lehtar"]) == ("11", 1000, "2025-02-01", "ÖRNEK TEDARİK LTD.", "ÖRNEK TEDARİK LTD.")
+    hesaplar = {b["ad"]: b["id"] for b in client.get("/api/banka-hesaplari", headers=h).json()}
+    assert s1["akibet"] == {"islem": "ode", "banka_hesap_id": hesaplar["Halkbank 10000001"], "tarih": "2025-02-03"}
+    assert (s2["cek_no"], s2["cari_unvan"], s2.get("akibet"), s2["belirsiz"]) == ("0000012", "ÖRNEK USTA", None, [])
+    a = client.post("/api/excel/cekler/onizle?yon=alinan", files={"dosya": ("c.xlsx", t.getvalue())}, headers=h).json()
+    c1, c2 = a["satirlar"]
+    assert c1["akibet"]["islem"] == "ciro" and c1["cari_unvan"] == "ÖRNEK MÜŞTERİ A.Ş."
+    assert (c2["kesideci"], c2["akibet"]["islem"], c2["akibet"]["tarih"]) == ("ÖRNEK ÇEKİ YAZAN", "tahsil", "2025-04-02")
+    assert {b["ad"] for b in client.get("/api/banka-hesaplari", headers=h).json()} == {"Halkbank 10000001", "Ziraat Bankası"}

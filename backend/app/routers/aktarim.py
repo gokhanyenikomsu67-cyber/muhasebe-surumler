@@ -1,5 +1,6 @@
 """Excel şablonlarıyla toplu fatura ve çek girişi (yapay zekasız)."""
 import io
+import re
 from collections import OrderedDict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -54,6 +55,127 @@ def _cek_santiye_aciklama(r: dict, santiyeler: list) -> tuple[str | None, str | 
     if not santiye and aciklama and (st := kural.icindeki_kayit(aciklama.split("|")[0], santiyeler)) is not None:
         santiye = st.ad
     return santiye, aciklama
+
+
+# Akınsoft Wolvox "Çek/Senet Raporu": yalnız programın kullandığı sütunlar alınır, öteki sütunlar yok sayılır
+AKINSOFT_CEK = {"tur": "Evrak Türü", "durum": "Evrak Durumu", "banka_durumu": "Banka Durumu", "vade": "Vadesi",
+                "no": "Evrak No", "tutar": "KPB Tutarı", "kayit": "Kayıt Tarihi", "gl_unvan": "Gl.Ticari Unvanı",
+                "gl_ad": "Gl.Adı Soyadı", "gd_unvan": "Gd.Ticari Unvanı", "gd_ad": "Gd.Adı Soyadı", "odeme": "Ödendiği Tarih",
+                "banka": "Evrak bankası", "sube": "Banka Şubesi", "hesap": "IBAN/Hesap No", "takas": "Takas Banka",
+                "borclu_unvan": "Asıl Borçlu Ünvanı", "borclu_ad": "Asıl Borçlu Adı", "borclu_soyad": "Asıl Borçlu Soyadı",
+                "degisme": "Değiştirme Tarihi"}
+
+
+def akinsoft_cekleri(veri: bytes) -> list[dict] | None:
+    """Akınsoft çek raporunu tanırsa satırları döndürür (tanımazsa None): {yon, tur, cek_no, banka, sube, hesap_no, tutar,
+    vade, alis_tarihi, cari, kesideci, durum, banka_durumu, takas, islem_tarihi}."""
+    try:
+        wb = load_workbook(io.BytesIO(veri), read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001
+        return None
+    for ws in wb.worksheets:
+        satirlar = ws.iter_rows(values_only=True)
+        for i, baslik in enumerate(satirlar):
+            adlar: dict[str, int] = {}
+            for j, x in enumerate(baslik):
+                adlar.setdefault(kural.ad_anahtari(str(x or "")), j)  # aynı adlı ikinci sütun (Vadesi saati) atlanır
+            yer = {a: adlar.get(kural.ad_anahtari(b)) for a, b in AKINSOFT_CEK.items()}
+            if all(yer[a] is not None for a in ("tur", "durum", "no", "tutar", "vade")):
+                break
+            if i > 10:
+                break
+        else:
+            continue
+        if not all(yer[a] is not None for a in ("tur", "durum", "no", "tutar", "vade")):
+            continue
+        sonuc = []
+        for r in satirlar:
+            al = lambda a: r[yer[a]] if yer[a] is not None and yer[a] < len(r) else None  # noqa: E731
+
+            def yazi(*alanlar):
+                return next((" ".join(str(al(a)).split()) for a in alanlar if str(al(a) or "").strip()), None)
+            tur = kural.sade(yazi("tur") or "")
+            if not tur:
+                continue
+            no = al("no")
+            no = str(int(no)) if isinstance(no, float) and no.is_integer() else (str(no).strip() if no is not None else None)
+            borclu = yazi("borclu_unvan") or " ".join(x for x in (yazi("borclu_ad"), yazi("borclu_soyad")) if x) or None
+            yon = "verilen" if tur.startswith(("kendi", "firma")) or "borc" in tur else "alinan"
+            sonuc.append({
+                "yon": yon, "tur": "senet" if "senet" in tur else "cek", "cek_no": no, "banka": yazi("banka"), "sube": yazi("sube"),
+                "hesap_no": yazi("hesap"), "tutar": kural.para_coz(al("tutar")), "vade": kural.tarih_coz(al("vade")),
+                "alis_tarihi": kural.tarih_coz(al("kayit")),
+                # Alınan çekte cari çeki aldığımız firma (Gl.), verilen çekte verdiğimiz firma (Gd.)
+                "cari": yazi("gl_unvan", "gl_ad") if yon == "alinan" else yazi("gd_unvan", "gd_ad"),
+                "ciro": yazi("gd_unvan", "gd_ad") if yon == "alinan" else None,
+                "kesideci": borclu or (yazi("gl_unvan", "gl_ad") if yon == "alinan" else None),
+                "durum": kural.sade(yazi("durum") or ""), "banka_durumu": kural.sade(yazi("banka_durumu") or ""),
+                "takas": yazi("takas"),
+                "islem_tarihi": kural.tarih_coz(al("odeme")) or kural.tarih_coz(al("degisme")) or kural.tarih_coz(al("kayit"))})
+        return sonuc
+    return None
+
+
+class _BankaHesaplari:
+    """Akınsoft'taki banka adına ("HALKBANK VADESİZ 10101594", "AKBANK VADESİZ - VADESİZ - TL") karşılık gelen hesabımız;
+    yoksa banka adıyla açılır (o bankanın ekstresi yüklenince IBAN'ı eklenir)."""
+
+    def __init__(self, db: Session, k: Kullanici):
+        from .. import cek_okuma
+        self.db, self.k, self.bul_banka = db, k, cek_okuma.banka_bul
+        self.liste = [b for b in db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id)) if b.tur != "kredi_karti"]
+        self.acilan: list[str] = []
+
+    def bul(self, metin: str | None, hesap_no: str | None = None) -> BankaHesabi | None:
+        banka = self.bul_banka(metin)
+        if not banka:
+            return None
+        ayni = [b for b in self.liste if self.bul_banka(" ".join(x for x in (b.banka, kural.iban_banka(b.iban), b.ad) if x)) == banka]
+        rakam = [x for x in (re.sub(r"\D", "", metin or ""), re.sub(r"\D", "", hesap_no or "")) if len(x) >= 5]
+        for b in ayni:
+            hesap = re.sub(r"\D", "", f"{b.iban or ''} {b.ad or ''}")
+            if any(x in hesap for x in rakam):
+                return b
+        if ayni:
+            return ayni[0]
+        no = next((x for x in re.findall(r"\d{5,}", metin or "")), None)  # "HALKBANK VADESİZ 10101594" -> "Halkbank 10101594"
+        b = BankaHesabi(sirket_id=self.k.sirket_id, ad=f"{banka} {no}" if no else banka, banka=banka)
+        self.db.add(b)
+        self.db.flush()
+        self.liste.append(b)
+        self.acilan.append(b.ad)
+        return b
+
+
+def _akinsoft_akibeti(x: dict, cariler: "_Cariler", hesaplar: _BankaHesaplari) -> tuple[dict | None, str | None]:
+    """Evrak durumundan akıbet (Toplu Çek Girişi'ndeki seçimle aynı biçim) ve gerekiyorsa kullanıcıya not."""
+    d, tarih = x["durum"], x["islem_tarihi"].isoformat() if x["islem_tarihi"] else None
+    if x["yon"] == "verilen":
+        if d.startswith("bankadan"):
+            b = hesaplar.bul(x["banka"], x["hesap_no"])
+            return ({"islem": "ode", "banka_hesap_id": b.id if b else None, "tarih": tarih},
+                    None if b else "Ödendiği banka hesabını seçin.")
+        if d.startswith("kasadan"):
+            return {"islem": "ode_kasa", "tarih": tarih}, None
+        if d.startswith("iade"):
+            return {"islem": "iade", "tarih": tarih}, None
+        return None, None  # ödenmedi
+    if d.startswith("ciro"):
+        c = cariler.bul(x["ciro"], None, "tedarikci") if x["ciro"] else None
+        return {"islem": "ciro", "cari_id": c.id if c else None, "tarih": tarih}, None if c else "Ciro edilen firmayı seçin."
+    tahsil = d.startswith("tahsil") or x["banka_durumu"].startswith("tahsil")
+    if tahsil or d.startswith("takas"):
+        b = hesaplar.bul(x["takas"]) if x["takas"] else None
+        return ({"islem": "tahsil" if tahsil else "tahsile_ver", "banka_hesap_id": b.id if b else None, "tarih": tarih},
+                None if b else "Akınsoft'ta tahsil edildiği hesap yazmıyor; banka hesabını seçin.")
+    if d.startswith("teminat"):
+        b = hesaplar.bul(x["takas"]) if x["takas"] else None
+        return {"islem": "teminata_ver", "banka_hesap_id": b.id if b else None, "tarih": tarih}, None if b else "Banka hesabını seçin."
+    if d.startswith("karsiliksiz") or d.startswith("protesto"):
+        return {"islem": "karsiliksiz", "tarih": tarih}, None
+    if d.startswith("iade"):
+        return {"islem": "iade", "tarih": tarih}, None
+    return None, None  # portföyde
 
 
 def _satirlar(veri: bytes, beklenen: list[str], es_anlamlilar: dict | None = None) -> list[dict]:
@@ -230,13 +352,16 @@ def cek_sablon(k: Kullanici = Depends(aktif_kullanici)):
 
 @router.post("/cekler/onizle")
 async def cek_onizle(yon: str = "alinan", dosya: UploadFile = File(...), db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
-    """Çek şablonundaki satırları kaydetmeden toplu giriş ekranına getirir."""
+    """Çek şablonundaki satırları kaydetmeden toplu giriş ekranına getirir. Akınsoft çek raporu da olduğu gibi okunur."""
     from . import cekler as cek_r
+    icerik = dosyayi_oku(dosya)
+    if (akinsoft := akinsoft_cekleri(icerik)) is not None:
+        return _akinsoft_onizle(akinsoft, yon, dosya.filename or "", db, k)
     satirlar, atlanan, toplam_satiri, excel_toplam, okunan_toplam = [], 0, 0, None, 0.0
     santiyeler = list(db.scalars(select(Santiye).where(Santiye.sirket_id == k.sirket_id)))
     hesaplar = [b for b in db.scalars(select(BankaHesabi).where(BankaHesabi.sirket_id == k.sirket_id)) if b.tur != "kredi_karti"]
     akibetler = []
-    for r in _satirlar(dosyayi_oku(dosya), CEK_SUTUNLARI, CEK_ES_ANLAMLILAR):
+    for r in _satirlar(icerik, CEK_SUTUNLARI, CEK_ES_ANLAMLILAR):
         # "TOPLAM / ARA TOPLAM / GENEL TOPLAM" satırı çek değildir; tutarı okunan çeklerle karşılaştırılır
         if not r.get("Çek No") and any("toplam" in kural.sade(str(v)) for a, v in r.items() if a != "_satir"):
             toplam_satiri += 1
@@ -293,6 +418,36 @@ async def cek_onizle(yon: str = "alinan", dosya: UploadFile = File(...), db: Ses
         uyari = (f"Excel'deki toplam {fmt(excel_toplam)}, okunan çeklerin toplamı {fmt(okunan_toplam)}; "
                  f"{fmt(abs(excel_toplam - okunan_toplam))} fark var. Eksik ya da fazla satır olabilir, kontrol edin.")
     return {"satirlar": hazir, "atlanan": atlanan, "toplam_satiri": toplam_satiri, "uyari": uyari}
+
+
+def _akinsoft_onizle(cekler: list[dict], yon: str, dosya_adi: str, db: Session, k: Kullanici) -> dict:
+    """Akınsoft çek raporu: bu yöndeki çekler akıbetiyle (ciro, tahsil, ödendi...) toplu giriş ekranına gelir."""
+    from . import cekler as cek_r
+    cariler, hesaplar = _Cariler(db, k), _BankaHesaplari(db, k)
+    secilen = [x for x in cekler if x["yon"] == yon]
+    satirlar, akibetler, notlar = [], [], []
+    for x in secilen:
+        akibet, not_ = _akinsoft_akibeti(x, cariler, hesaplar)
+        akibetler.append(akibet)
+        notlar.append(not_)
+        satirlar.append({"tur": x["tur"], "cek_no": x["cek_no"], "banka": x["banka"], "sube": x["sube"], "hesap_no": x["hesap_no"],
+                         "kesideci": x["kesideci"], "tutar": abs(x["tutar"]) if x["tutar"] else None,
+                         "vade": x["vade"].isoformat() if x["vade"] else None,
+                         "alis_tarihi": x["alis_tarihi"].isoformat() if x["alis_tarihi"] else None,
+                         "cari_unvan": x["cari"], "cari_vkn": None, "santiye_ad": None, "aciklama": None,
+                         "lehtar": x["cari"] if yon == "verilen" else None,
+                         "belirsiz": [a for a in ("tutar", "vade") if not x[a]]})
+    hazir = cek_r._okunanlari_hazirla(db, k, satirlar, None, dosya_adi, cekten=False)
+    for h, a, n in zip(hazir, akibetler, notlar):
+        if a:
+            h["akibet"] = a
+        if n and not h.get("sorun"):
+            h["sorun"] = n
+        # Lehtar ve cari Akınsoft'ta yazılı, kesindir (caride yoksa satırda "Yeni cari açılacak" yazar, kırmızı olmaz)
+        h["belirsiz"] = [b for b in (h.get("belirsiz") or []) if b not in ("lehtar", "cari_unvan")]
+    db.commit()  # ciro edilen firmalar ve banka adıyla açılan hesaplar
+    return {"satirlar": hazir, "atlanan": len(cekler) - len(secilen), "toplam_satiri": 0, "uyari": None, "akinsoft": True,
+            "yeni_hesap": hesaplar.acilan}
 
 
 @router.post("/cekler/yukle")
