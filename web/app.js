@@ -3795,6 +3795,7 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
         catch (e) { bildir(e.message, true); }
       };
       // Cari hücresi: adın bir kısmı yazılarak aranır; yoksa yazılan adla (benzer ad/VKN sorularak) yeni cari açılır.
+      const cariAdi = new Map(sec.cariler.map((c) => [c.id, c.unvan]));
       const cariHucresi = (x) => {
         if (x.tur === "nakit_cekim" || x.tur === "nakit_yatirma") return h("td", {}, "Nakit Kasa");
         if (x.tur === "virman") {
@@ -3809,9 +3810,16 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
           return h("td", { class: "cari-hucre" }, h("div", { style: "font-size:12px;color:var(--soluk,#666)" },
             x.yon === "cikis" ? "Bankadan bankaya transfer, giden hesap:" : "Bankadan bankaya transfer, gelen hesap:"), ks);
         }
-        const sel = secim(secenekListesi(sec.cariler, "unvan", "— Cari yok —"), x.cari_id, (e) => kaydetSatir(x, "cari_id", Number(e.target.value) || null));
-        const td = h("td", { class: "cari-hucre" }, sel);
-        cariAramali(sel, sec.cariler, { tur: x.yon === "giris" ? "musteri" : "tedarikci" });
+        // Cari listesi (yüzlerce seçenek) yalnız kutuya tıklanınca kurulur; her satırda kurmak sayfayı ağırlaştırıyordu
+        const td = h("td", { class: "cari-hucre" });
+        const ac = () => {
+          const sel = secim(secenekListesi(sec.cariler, "unvan", "— Cari yok —"), x.cari_id, (e) => kaydetSatir(x, "cari_id", Number(e.target.value) || null));
+          td.replaceChildren(sel);
+          cariAramali(sel, sec.cariler, { tur: x.yon === "giris" ? "musteri" : "tedarikci" });
+          td.querySelector("input")?.focus();
+        };
+        td.append(h("span", { class: "arama-sec" }, h("input", { type: "text", class: "arama-kutu", value: cariAdi.get(x.cari_id) || "",
+          placeholder: "— Cari yok —", onfocus: ac })));
         return td;
       };
       const turler = Object.entries(HAREKET_TURLERI).filter(([k]) => !k.startsWith("cek_c") && k !== "cek_karsiliksiz");
@@ -3829,7 +3837,16 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
       };
       const tumu = h("input", { type: "checkbox", onchange: (e) => { liste.forEach((x) => (e.target.checked ? secili.add(x.id) : secili.delete(x.id))); yenidenCiz(); } });
       tumu.checked = liste.length > 0 && secili.size === liste.length;
-      const govde = h("tbody", {}, liste.map((x) => h("tr", { class: x.sorun ? "islenemedi" : "", title: x.sorun || "" },
+      // Büyük ekstrede (binlerce satır) her satıra cari listesi çizmek tarayıcıyı donduruyordu: sayfa sayfa gösterilir
+      const SAYFA = 100, sayfaSayisi = Math.max(1, Math.ceil(liste.length / SAYFA));
+      st.sayfa = Math.min(st.sayfa || 0, sayfaSayisi - 1);
+      const gorunen = liste.slice(st.sayfa * SAYFA, (st.sayfa + 1) * SAYFA);
+      const sayfaDugmeleri = () => sayfaSayisi > 1 ? h("div", { class: "liste-ust" },
+        h("button", { class: "dugme", disabled: st.sayfa === 0, onclick: () => { st.sayfa--; yenidenCiz(); } }, "◀ Önceki"),
+        h("span", {}, `${st.sayfa * SAYFA + 1}-${Math.min(liste.length, (st.sayfa + 1) * SAYFA)} / ${liste.length} satır`),
+        h("button", { class: "dugme", disabled: st.sayfa >= sayfaSayisi - 1, onclick: () => { st.sayfa++; yenidenCiz(); } }, "Sonraki ▶"),
+        h("span", {}, "Üstteki kutu bütün sayfaları seçer.")) : null;
+      const govde = h("tbody", {}, gorunen.map((x) => h("tr", { class: x.sorun ? "islenemedi" : "", title: x.sorun || "" },
         h("td", {}, h("input", { type: "checkbox", checked: secili.has(x.id), onchange: (e) => (e.target.checked ? secili.add(x.id) : secili.delete(x.id)) })),
         h("td", {}, tarih(x.tarih)), h("td", { style: "white-space:normal;min-width:220px" }, x.aciklama || ""),
         h("td", { class: "sayi" }, x.yon === "giris" ? para(x.tutar) : ""), h("td", { class: "sayi" }, x.yon === "cikis" ? para(x.tutar) : ""),
@@ -3852,8 +3869,8 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
       el.append(h("div", { class: "liste-ust" }, h("h2", {}, gomulu ? "Onaylanmamış ekstre satırları" : "Onay Bekleyen Banka ve Kart Hareketleri"),
           h("button", { class: "dugme ana", onclick: () => toplu("onayla") }, "Seçilenleri onayla"),
           h("button", { class: "dugme tehlike", onclick: () => toplu("sil") }, "Seçilenleri sil"),
-          h("label", {}, h("input", { type: "checkbox", checked: st.yalnizSorunlu, onchange: (e) => { st.yalnizSorunlu = e.target.checked; yenidenCiz(); } }), " Yalnız işlenemeyenler"),
-          hesapAdlari.length > 1 ? h("label", {}, "Hesap: ", h("select", { onchange: (e) => { st.hesapSuzgeci = e.target.value; secili.clear(); yenidenCiz(); } },
+          h("label", {}, h("input", { type: "checkbox", checked: st.yalnizSorunlu, onchange: (e) => { st.yalnizSorunlu = e.target.checked; st.sayfa = 0; yenidenCiz(); } }), " Yalnız işlenemeyenler"),
+          hesapAdlari.length > 1 ? h("label", {}, "Hesap: ", h("select", { onchange: (e) => { st.hesapSuzgeci = e.target.value; st.sayfa = 0; secili.clear(); yenidenCiz(); } },
             [["", "Tümü"], ...hesapAdlari.map((a) => [a, a])].map(([d, m]) => h("option", { value: d, selected: d === st.hesapSuzgeci }, m)))) : null,
           h("span", {}, "Cari, açıklamadaki ünvan, VKN veya IBAN'dan bulunur; yoksa yeni açılır. Banka kesintileri MUHTELİF BANKA İŞLEMLERİ carisine, nakit çekimler kasaya, hesaplar arası transferler ve kart borcu ödemeleri karşı hesaba işlenir. Kart harcamasında seçtiğiniz cari sonraki ekstrelerde hatırlanır.")),
         sorunlu ? h("div", { class: "hata-kutu" }, `${sorunlu} satır işlenemedi (kırmızı). Nedeni son sütunda yazıyor; cari ya da tür seçerek düzeltin.`) : null,
@@ -3863,9 +3880,11 @@ async function taslakHareketleriCiz(el, st, gomulu = false) {
             return v.cari_id || v.tur ? topluAta(v) : bildir("Cari ya da tür seçin.", true);
           } }, "Ata"),
           h("button", { class: "dugme", onclick: () => topluAta({ muhtelif: true }) }, "MUHTELİF BANKA İŞLEMLERİ'ne ata")),
+        sayfaDugmeleri(),
         liste.length ? h("div", { class: "tablo-kap" }, h("table", { class: "liste kalemler-secim" },
           h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Tarih", "Açıklama", "Giriş", "Çıkış", "Cari", "Tür", "Hesap", "İşlenemedi çünkü"].map((b) => h("th", {}, b)))),
-          govde)) : h("p", {}, "Onay bekleyen hareket yok."));
+          govde)) : h("p", {}, "Onay bekleyen hareket yok."),
+        sayfaDugmeleri());
       durum(`${liste.length} hareket onay bekliyor`);
 }
 
