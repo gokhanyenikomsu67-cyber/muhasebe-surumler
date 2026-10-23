@@ -47,7 +47,7 @@ def yukle(h, hesap_id, icerik, ad="kart.csv"):
 
 def onayla_hepsi(h):
     idler = [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]
-    client.post("/api/hareketler/onayla", json={"idler": idler}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": idler}, headers=h)
 
 
 def test_isyeri_adi_temizlenir():

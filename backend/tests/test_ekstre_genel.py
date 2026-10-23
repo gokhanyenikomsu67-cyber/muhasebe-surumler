@@ -77,7 +77,7 @@ def test_kendi_hesaplar_arasi_virman_eslesir_ve_cift_yazilmaz():
     cariler = {x["unvan"]: x for x in client.get("/api/cariler", headers=h).json()}
     assert cariler["ÖRNEK BETON A.Ş"]["iban"] == ib_cari  # bizim IBAN'ımız (a) cariye yazılmaz
     assert not any(x["iban"] in (a, b) for x in cariler.values())
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in ta]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in ta]}, headers=h)
     for x in client.get("/api/banka-hesaplari", headers=h).json():
         assert x["mutabakat_farki"] == 0, x  # transfer iki hesapta da bir kez
     assert not [x for x in client.get("/api/hareketler", headers=h).json() if x.get("kaynak") == "esleme"]
@@ -100,7 +100,7 @@ def test_virmanin_karsi_hesabi_elle_degistirilir():
     assert client.put(f"/api/hareketler/{x['id']}/karsi-hesap", json={"karsi_hesap_id": x["banka_hesap_id"]}, headers=h).status_code == 400
     r = client.put(f"/api/hareketler/{x['id']}/karsi-hesap", json={"karsi_hesap_id": diger["id"]}, headers=h)
     assert r.status_code == 200 and r.json()["karsi_hesap_ad"] == "Hesaplar arası → Deneme Vadesiz" and not r.json()["sorun"]
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"]]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"]]}, headers=h)
     bakiye = lambda i: next(b for b in client.get("/api/banka-hesaplari", headers=h).json() if b["id"] == i)["bakiye"]  # noqa: E731
     assert bakiye(diger["id"]) == 300
     # Onaydan sonra değiştirilirse karşılık kaydı yeni hesaba taşınır
@@ -149,7 +149,7 @@ def test_ek_hesapli_ekstrede_bakiye_toplamdir_ic_aktarim_hareket_sayilmaz():
     assert r.status_code == 200, r.text
     ta = _taslak(h)
     assert sorted(x["tutar"] for x in ta) == [5, 200, 300] and not any("ANAPARA" in x["aciklama"] for x in ta)
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in ta]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in ta]}, headers=h)
     hesap = client.get("/api/banka-hesaplari", headers=h).json()[0]
     assert hesap["ekstre_bakiye"] == -800 and hesap["mutabakat_farki"] == 0
 

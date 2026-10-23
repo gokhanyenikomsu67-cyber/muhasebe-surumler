@@ -29,7 +29,7 @@ def test_kasadaki_nakit_cekim_karsiligi_tek_basina_silinmez():
     a = client.post("/api/banka-hesaplari", json={"ad": "Halkbank 94", "banka": "Halkbank"}, headers=h).json()
     ekstre_yukle(h, a["id"], "03.10.2026;r3;200,00;B;500,00;NAKİT ÇEKİLEN\n")
     taslak = client.get("/api/hareketler?durum=taslak", headers=h).json()
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in taslak]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in taslak]}, headers=h)
     kasa = client.get("/api/kasa", headers=h).json()
     assert kasa["bakiye"] == 200
     karsilik = kasa["hareketler"][0]
@@ -68,7 +68,7 @@ def test_ayni_gun_yeniden_eskiye_ekstre_bakiyesi_dogru():
     a = client.post("/api/banka-hesaplari", json={"ad": "Halkbank 94"}, headers=h).json()
     ekstre_yukle(h, a["id"], "05.10.2026;r2;100,00;B;900,00;EFT MASRAFI\n"
                              "05.10.2026;r1;1.000,00;A;1.000,00;Gelen Firma Ltd,GELEN FİRMA LTD 'DAN ödeme\n")
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]},
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]},
                 headers=h)
     b = next(x for x in client.get("/api/banka-hesaplari", headers=h).json() if x["id"] == a["id"])
     assert (b["ekstre_bakiye"], b["bakiye"], b["mutabakat_farki"]) == (900, 900, 0)

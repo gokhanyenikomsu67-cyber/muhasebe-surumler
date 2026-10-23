@@ -30,7 +30,7 @@ def ekstre_yukle(monkeypatch, h, hesap_id, satirlar):
 def onayla_hepsi(h):
     taslak = [t["id"] for t in client.get("/api/hareketler?durum=taslak", headers=h).json()]
     if taslak:
-        client.post("/api/hareketler/onayla", json={"idler": taslak}, headers=h)
+        client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": taslak}, headers=h)
 
 
 def fatura(h, yon, no, cari_id, tutar, tarih="2026-10-01"):
@@ -212,7 +212,7 @@ def test_mutabakat_ekrani_farkin_nedenini_gosterir(monkeypatch):
         {"tarih": "2026-10-01", "aciklama": "EFT AHMET YAPI", "tutar": 600, "bakiye": 1600, "onerilen_cari_id": m, "onerilen_tur": "tahsilat"},
         {"tarih": "2026-10-05", "aciklama": "HAVALE", "tutar": 100, "bakiye": 1700, "onerilen_cari_id": m, "onerilen_tur": "tahsilat"}])
     eft = next(x for x in client.get("/api/hareketler?durum=taslak", headers=h).json() if x["tutar"] == 600)
-    client.post("/api/hareketler/onayla", json={"idler": [eft["id"]]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [eft["id"]]}, headers=h)
     # Vadesi geçmiş, tahsil edilmemiş çek
     client.post("/api/cekler", json={"yon": "alinan", "tutar": 50, "vade": "2020-01-01", "cari_id": m}, headers=h)
 

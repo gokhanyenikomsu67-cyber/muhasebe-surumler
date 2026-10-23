@@ -320,7 +320,7 @@ def test_ekstre_halkbank_bicimi():
     # Başka hesap seçilse de ekstre IBAN'ına göre kendi hesabına işlenir (satırlar zaten var: yeniden okunur, eklenmez)
     assert (r.json()["hesap"], r.json()["eklenen"], r.json()["yenilenen"]) == (banka["ad"], 0, 4)
     # Açılış bakiyesi ilk satırdan, ekstre bakiyesi son satırdan alınır; onaylanınca fark kalmaz
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in client.get("/api/hareketler?durum=taslak", headers=h).json()]}, headers=h)
     hesap = next(x for x in client.get("/api/banka-hesaplari", headers=h).json() if x["id"] == banka["id"])
     assert (hesap["acilis_bakiyesi"], hesap["ekstre_bakiye"], hesap["bakiye"], hesap["mutabakat_farki"]) == (0, -10018.73, -10018.73, 0)
 
@@ -343,7 +343,7 @@ def test_hesaplar_arasi_transfer_ve_kasa():
     a53 = hesaplar["Halkbank 1553"]
     taslak = client.get("/api/hareketler?durum=taslak", headers=h).json()
     assert {x["tur"] for x in taslak} == {"tahsilat", "virman", "nakit_cekim"}
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in taslak]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in taslak]}, headers=h)
     hesaplar = {x["id"]: x for x in client.get("/api/banka-hesaplari", headers=h).json()}
     assert hesaplar[a94["id"]]["bakiye"] == 500 and hesaplar[a94["id"]]["mutabakat_farki"] == 0
     assert hesaplar[a53["id"]]["bakiye"] == 300
@@ -1369,7 +1369,7 @@ def test_hareketli_banka_hesabi_hareketleriyle_birlikte_silinir():
     assert (hesap["hareket_sayisi"], hesap["onay_bekleyen"]) == (2, 2)
     assert len(client.get(f"/api/hareketler?banka_hesap_id={a['id']}", headers=h).json()) == 2
     taslak = client.get("/api/hareketler?durum=taslak", headers=h).json()
-    client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in taslak]}, headers=h)
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in taslak]}, headers=h)
     assert client.get("/api/kasa", headers=h).json()["bakiye"] == 200
     r = client.delete(f"/api/banka-hesaplari/{a['id']}", headers=h)
     assert r.status_code == 409 and "hareketleriyle" in r.json()["detail"]
@@ -1463,7 +1463,7 @@ def test_hareketleri_silinen_hesapta_eski_ekstre_bakiyesi_kalmaz():
                                 files={"dosya": ("e.csv", e.encode("cp1254"), "text/csv")}, headers=h)
     hesap = lambda: next(x for x in client.get("/api/banka-hesaplari", headers=h).json() if x["id"] == a["id"])
     yukle()
-    onayla = lambda: client.post("/api/hareketler/onayla", json={"idler": [x["id"] for x in client.get(
+    onayla = lambda: client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [x["id"] for x in client.get(
         "/api/hareketler?durum=taslak", headers=h).json()]}, headers=h)
     onayla()
     b = hesap()
@@ -1631,3 +1631,12 @@ def test_ekstre_excel_boyutu_yanlis_yazilmis():
     r = kural.ekstre_kural_oku(cikis.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", [], "DENEME")
     assert [(s["tutar"], s["onerilen_tur"]) for s in r["satirlar"]] == [(-50.0, "banka_masrafi"), (200.0, "tahsilat")]
     assert r["satirlar"][1]["onerilen_cari"]["unvan"] == "ORNEK YAPI LİMİTED ŞİRKETİ"
+
+
+def test_geri_alinan_banka_kesintisi_ve_nottaki_banka():
+    assert kural.tur_tahmin(12.19, "TERS İŞLEM - 7777/MBL-EFT KOMİSYONU", None, ["afsa"]) == "diger"
+    from app.routers.banka import _koddaki_banka
+    assert _koddaki_banka("FAST:AFSA GRUP LTD ŞTİ afsa vakif katilim bankasina", "Akbank") == "Vakıf Katılım"
+    assert _koddaki_banka("FAST:AFSA GRUP LTD ŞTİ afsa halkbank akbank gecis", "Akbank") == "Halkbank"
+    assert _koddaki_banka("7777/MBL-1-Afsa Grup Ltd Şti-Afsa grup akbanktan", "Akbank") is None
+    assert _koddaki_banka("FİRMAMIZ*0010*açıklama", "Akbank") == "Ziraat Bankası"

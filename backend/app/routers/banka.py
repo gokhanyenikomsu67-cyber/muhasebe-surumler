@@ -401,6 +401,8 @@ def hareket_toplu_sil(istek: SilIstegi, db: Session = Depends(get_db), k: Kullan
 
 class OnayIstegi(BaseModel):
     idler: list[int]
+    # İşlenemeyen (sorunlu) satırlar yalnız açıkça istenirse onaylanır; toplu onayda onaya hazırlarla birlikte kaydedilmez
+    sorunlular_dahil: bool = False
 
 
 class TopluHareket(BaseModel):
@@ -525,15 +527,18 @@ def _elle_degisti(h: Hareket) -> None:
 
 @router.post("/hareketler/onayla")
 def hareket_onayla(istek: OnayIstegi, db: Session = Depends(get_db), k: Kullanici = Depends(yazabilir)):
-    sayi = 0
+    sayi = atlanan = 0
     for h in db.scalars(select(Hareket).where(Hareket.sirket_id == k.sirket_id, Hareket.id.in_(istek.idler),
                                               Hareket.durum == "taslak")).all():
+        if not istek.sorunlular_dahil and sorun(h):
+            atlanan += 1
+            continue
         h.durum = "onayli"
         esle(db, h)
         kartlar.isyeri_ogren(db, h)
         sayi += 1
     db.commit()
-    return {"onaylanan": sayi}
+    return {"onaylanan": sayi, "atlanan": atlanan}
 
 
 # --- Banka ekstresi ------------------------------------------------------
@@ -708,15 +713,38 @@ def _numaradan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: 
 
 
 def _banka_kodundan_hesap(hesaplar: list[BankaHesabi], hesap: BankaHesabi, aciklama: str) -> BankaHesabi | None:
-    """"FİRMAMIZ ...*0010*..." gibi satırda karşı bankanın kodu yazar; o bankada tek hesabımız varsa para oradan gelmiştir."""
-    banka = _koddaki_banka(aciklama)
+    """"FİRMAMIZ ...*0010*..." gibi satırda karşı bankanın kodu (ya da notta adı) yazar; o bankada tek hesabımız varsa
+    para oradan gelmiştir."""
+    banka = _koddaki_banka(aciklama, kural.iban_banka(hesap.iban) or hesap.banka)
     adaylar = [b for b in hesaplar if banka and b.id != hesap.id and b.tur != kartlar.KART and (kural.iban_banka(b.iban) or b.banka) == banka]
     return adaylar[0] if len(adaylar) == 1 else None
 
 
-def _koddaki_banka(aciklama: str) -> str | None:
+# Transfer notunda yazan banka adları ("afsa vakif katilim bankasina", "ziraat bankasindan", "yapikrediden")
+_NOTTAKI_BANKA = [(r"vakif ?katilim", "Vakıf Katılım"), (r"ziraat ?katilim", "Ziraat Katılım"), (r"ziraat", "Ziraat Bankası"),
+                  (r"yapi ?kredi", "Yapı Kredi"), (r"halk ?bank|\bhalk\b", "Halkbank"), (r"vakif ?bank", "VakıfBank"),
+                  (r"\bakbank", "Akbank"), (r"garanti", "Garanti BBVA"), (r"is ?bank|is bankasi", "İş Bankası"),
+                  (r"kuveyt", "Kuveyt Türk"), (r"albaraka", "Albaraka Türk"), (r"turkiye finans", "Türkiye Finans"),
+                  (r"deniz ?bank", "DenizBank"), (r"\bqnb\b|finansbank", "QNB"), (r"\bteb\b", "TEB"), (r"seker ?bank", "Şekerbank")]
+
+
+def _koddaki_banka(aciklama: str, kendi_banka: str | None = None) -> str | None:
+    """Karşı bankanın adı: yıldızlar arasındaki banka kodundan, yoksa notta geçen tek başka banka adından."""
     m = re.search(r"\*0*(\d{2,4})\*", aciklama)
-    return kural.BANKA_KODLARI.get(m.group(1).zfill(5)) if m else None
+    if m:
+        return kural.BANKA_KODLARI.get(m.group(1).zfill(5))
+    baska = [b for b in _nottaki_bankalar(aciklama) if b != kendi_banka]
+    return baska[0] if len(baska) == 1 else None
+
+
+def _nottaki_bankalar(aciklama: str) -> list[str]:
+    s = kural.sade(aciklama)
+    bulunan: list[str] = []
+    for desen, ad in _NOTTAKI_BANKA:
+        if re.search(desen, s) and ad not in bulunan:
+            s = re.sub(desen, " ", s)  # "vakif katilim" bir kez sayılır, ardından "vakifbank" diye yeniden aranmaz
+            bulunan.append(ad)
+    return bulunan
 
 
 def _ibansiz_ayni_banka(hesaplar: list[BankaHesabi], banka: str | None) -> BankaHesabi | None:
@@ -985,15 +1013,27 @@ def _ekstre_kaydet(db: Session, k: Kullanici, hesap: BankaHesabi, okunan: dict) 
     for v in yeni_virmanlar:
         if (v.ai_okuma or {}).get("karsi_hesap_id") or v.bagli_hareket_id:
             continue
-        banka = _koddaki_banka(v.aciklama or "")
-        if not banka or banka == (kural.iban_banka(hesap.iban) or hesap.banka) or any(
-                (kural.iban_banka(b.iban) or b.banka) == banka for b in hesaplar if b.tur != kartlar.KART):
+        kendi_banka = kural.iban_banka(hesap.iban) or hesap.banka
+        banka = _koddaki_banka(v.aciklama or "", kendi_banka)
+        if not banka and kendi_banka and _nottaki_bankalar(v.aciklama or "") == [kendi_banka]:
+            # Notta yalnız bu hesabın bankası yazıyor ("akbanktan afsa ..."): aynı bankadaki öteki hesabımız
+            ayni = [b for b in hesaplar if b.id != hesap.id and b.tur != kartlar.KART and (kural.iban_banka(b.iban) or b.banka) == kendi_banka]
+            if len(ayni) == 1:
+                v.ai_okuma = {**(v.ai_okuma or {}), "karsi_hesap_id": ayni[0].id}
             continue
-        b = BankaHesabi(sirket_id=k.sirket_id, ad=banka, banka=banka)
-        db.add(b)
-        db.flush()
-        hesaplar.append(b)
-        yeni_hesap.append(b.ad)
+        if not banka or banka == kendi_banka:
+            continue
+        o_bankada = [b for b in hesaplar if b.tur != kartlar.KART and (kural.iban_banka(b.iban) or b.banka) == banka]
+        if len(o_bankada) > 1:
+            continue  # o bankada birden çok hesabımız var: hangisi olduğu bilinmez, kullanıcı seçer
+        if o_bankada:
+            b = o_bankada[0]  # bu yüklemede az önce açılmış ya da tek hesap
+        else:
+            b = BankaHesabi(sirket_id=k.sirket_id, ad=banka, banka=banka)
+            db.add(b)
+            db.flush()
+            hesaplar.append(b)
+            yeni_hesap.append(b.ad)
         v.ai_okuma = {**(v.ai_okuma or {}), "karsi_hesap_id": b.id}
     # Ekstrenin kapsadığı günlerde yeni okumanın artık vermediği onaylanmamış eski satırlar (ör. ek hesabın iç aktarımı) kalkar
     tarihler = [x["tarih"] for x in satirlar if x.get("tarih")]

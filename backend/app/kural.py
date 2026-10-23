@@ -2445,6 +2445,8 @@ def tur_tahmin(tutar: float, aciklama: str, cari_id: int | None, kendi: list[str
         return "nakit_cekim"
     if tutar > 0 and NAKIT_YATIRMA.search(s):
         return "nakit_yatirma"
+    if tutar > 0 and re.search(r"ters islem|\biade", s) and any(k in s for k in MASRAF_KELIMELERI):
+        return "diger"  # geri alınan banka kesintisi ("TERS İŞLEM - EFT KOMİSYONU"): MUHTELİF BANKA İŞLEMLERİ'ne
     if tutar < 0 and any(k in s.split(",")[0] for k in MASRAF_KELIMELERI):
         return "banka_masrafi"  # "KREDİ PEŞİN KOMİSYON, ŞİRKET, kredi hesabı" gibi kesintiler virman değildir
     if not cari_id and virman_mi(aciklama, kendi or [], tutar):

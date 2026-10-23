@@ -124,7 +124,14 @@ def test_ekstre_okuma(monkeypatch):
     taslaklar = client.get("/api/hareketler?durum=taslak", headers=h).json()
     assert len(taslaklar) == 4
 
-    client.post("/api/hareketler/onayla", json={"idler": [t["id"] for t in taslaklar]}, headers=h)
+    # Toplu onayda işlenemeyen satır (carisi bulunamayan ödeme) birlikte kaydedilmez, ayrıca beklemeye devam eder
+    r = client.post("/api/hareketler/onayla", json={"idler": [t["id"] for t in taslaklar]}, headers=h).json()
+    assert (r["onaylanan"], r["atlanan"]) == (3, 1)
+    kalan = client.get("/api/hareketler?durum=taslak", headers=h).json()
+    assert [t["aciklama"] for t in kalan] == ["Yabancı"]
+    assert banka_bakiye(h, banka["id"]) == round(1000 + 5000 - 2000 - 12.5, 2)
+    # Kullanıcı açıkça isterse olduğu gibi onaylanır
+    client.post("/api/hareketler/onayla", json={"sorunlular_dahil": True, "idler": [kalan[0]["id"]]}, headers=h)
     assert banka_bakiye(h, banka["id"]) == round(1000 + 5000 - 2000 - 12.5 - 100, 2)
     assert bakiye(h, musteri["id"]) == -5000
     assert bakiye(h, tedarikci["id"]) == 2000
