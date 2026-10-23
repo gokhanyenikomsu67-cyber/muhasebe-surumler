@@ -8,7 +8,7 @@ call :yaz "Not: bu pencerenin icine tiklarsaniz Windows yaziyi durdurabilir; dur
 
 rem Eski surum hala aciksa once kapatilir: acik program paket dosyalarini kilitler, kurulum/guncelleme yapilamaz
 set "ESKI="
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":8000 .*LISTENING"') do (tasklist /fi "pid eq %%p" | findstr /i "python" >nul && taskkill /f /pid %%p >nul 2>nul && set "ESKI=1")
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":8000 .*LISTENING"') do (tasklist /fi "pid eq %%p" | findstr /i "python" >nul && taskkill /f /t /pid %%p >nul 2>nul && set "ESKI=1")
 if defined ESKI call :yaz "      Acik kalan eski program penceresi kapatildi."
 if defined ESKI timeout /t 2 /nobreak >nul
 
@@ -207,7 +207,7 @@ if "%MUHASEBE_AG%"=="1" echo Yeni hesap yalniz bu bilgisayardan acilir; kullanic
 echo Verileriniz: %USERPROFILE%\Documents\Muhasebe Verileri (yeni paketi baska klasore acsaniz da kaybolmaz)
 echo Kapatmak icin bu pencereyi kapatin.
 rem Eski surum hala aciksa (onceki pencere kapatilmadiysa) kapatilir; yoksa tarayici eski programa baglanir
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":8000 .*LISTENING"') do (tasklist /fi "pid eq %%p" | findstr /i "python" >nul && taskkill /f /pid %%p >nul 2>nul)
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":8000 .*LISTENING"') do (tasklist /fi "pid eq %%p" | findstr /i "python" >nul && taskkill /f /t /pid %%p >nul 2>nul)
 start "" http://localhost:8000
 rem Program ve ardindaki denetimler tek blokta: guncelleme bu dosyayi degistirse de bu pencere eski komutlarla biter
 (

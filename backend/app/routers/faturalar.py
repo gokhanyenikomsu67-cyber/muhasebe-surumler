@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from .. import ai, karekod, kural, malzeme, ocr, schemas, tani
+from .. import ai, islemci, karekod, kural, malzeme, ocr, schemas, tani
+from ..pdf_okuma import karsi_tarafi_karekoddan, pdf_oku
 from ..auth import aktif_kullanici, yazabilir
 from ..db import VERI_KLASORU, get_db
 from ..models import GIDER_TURLERI, Cari, Depo, Fatura, FaturaKalem, Kullanici, RedFatura, Santiye, Sirket
@@ -526,19 +527,14 @@ def oku(dosya: UploadFile = File(...), yon: str = "gelen", yontem: str = "otomat
             tani.okundu(k.sirket_id, dosya.filename)
             return sonuc
         elif mime == "application/pdf" and yontem != "ai":
-            # Satış faturası alış ekranından (ya da tersi) yüklendiyse belgedeki taraflar esas alınır
-            # GİB karekodundaki taraflar kesindir (yazıda satıcı yerine bizim VKN'miz okunabilir: Turkcell, Vodafone)
-            yon = kural.pdf_yonu(icerik, sirket.vkn, lambda: karekod.yonu(karekod.oku(icerik, True), sirket.vkn)) or yon
-            # Önce yapay zekasız; okunamazsa ve izin varsa yapay zekaya düş.
-            try:
-                okunan = kural.pdf_fatura_oku(icerik, santiye_adlari, sirket.unvan, sirket.vkn, yon)
-                if not (okunan["genel_toplam"] or okunan["fatura_no"]):
-                    raise kural.KuralHatasi("PDF'te fatura bilgisi bulunamadı. XML dosyasını yükleyin ya da elle girin.")
-                # Kalemler PDF yazısından okunamadıysa ya da tutmadıysa sayfa resminden de okunur
-                okunan = ocr.pdf_kalemlerini_tamamla(okunan, icerik, santiye_adlari, sirket.unvan, sirket.vkn, yon)
-                okunan = karsi_tarafi_karekoddan(okunan, icerik, sirket, yon)
-            except kural.KuralHatasi as e:
-                okunan = _resimden_oku(icerik, True, mime, yontem, santiye_adlari, sirket, yon, e)
+            # Önce yapay zekasız (ayrı işlemde: toplu yüklemede dosyalar çekirdeklere dağılır); okunamazsa resimden,
+            # o da olmazsa ve izin varsa yapay zekaya düşer. VKN'miz bilinmiyorsa karekoddan öğrenileceği için aynı işlemde.
+            ac = (icerik, santiye_adlari, sirket.unvan, sirket.vkn, yon)
+            r = islemci.calistir(pdf_oku, *ac) if sirket.vkn else pdf_oku(*ac)
+            yon = r["yon"]
+            if not sirket.vkn and r.get("vkn"):
+                sirket.vkn = r["vkn"]
+            okunan = r.get("okunan") or _resimden_oku(icerik, True, mime, yontem, santiye_adlari, sirket, yon, kural.KuralHatasi(r.get("hata")))
             okunanlar = [okunan]
         elif ocr.resim_mi(adi, mime) and yontem != "ai":
             okunanlar = [_resimden_oku(icerik, False, mime, yontem, santiye_adlari, sirket, yon)]
@@ -739,29 +735,6 @@ def _xml_kaydet(db: Session, k: Kullanici, parcalar, yon: str, santiyeler, sirke
         faturalar.append(f)
     db.commit()
     return [_cikis_json(f) for f in faturalar] + redler
-
-
-def karsi_tarafi_karekoddan(okunan: dict, icerik: bytes, sirket: Sirket, yon: str) -> dict:
-    """PDF yazısında karşı firmanın VKN'si bulunamadıysa ya da bizimki çıktıysa VKN faturanın GİB karekodundan alınır;
-    kendi VKN'miz hiçbir yoldan cari olmaz."""
-    taraf = "satici" if yon == "gelen" else "alici"
-    vkn = re.sub(r"\D", "", str((okunan.get(taraf) or {}).get("vkn") or ""))
-    kendi = re.sub(r"\D", "", sirket.vkn or "")
-    if vkn and kendi and vkn != kendi:
-        return okunan
-    k = karekod.oku(icerik, True) if karekod.var_mi() else None
-    if k and not kendi:
-        # Firma bilgisinde VKN'miz yok: karekodda alış faturasının alıcısı, satış faturasının satıcısı biziz
-        kendi = re.sub(r"\D", "", str(k.get("avkntckn" if yon == "gelen" else "vkntckn") or ""))
-        if len(kendi) in (10, 11):
-            sirket.vkn = kendi
-        if vkn and vkn != kendi:
-            return okunan
-    if k and yon == "gelen":
-        okunan = karekod.uygula(okunan, k, sirket.vkn, yon)
-    if re.sub(r"\D", "", str((okunan.get(taraf) or {}).get("vkn") or "")) == kendi:
-        okunan = {**okunan, taraf: {**okunan[taraf], "vkn": None}}
-    return okunan
 
 
 def kendi_firmamiz_mi(db: Session, c: Cari, sirket_id: int) -> bool:

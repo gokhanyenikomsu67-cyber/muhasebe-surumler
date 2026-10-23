@@ -2104,7 +2104,7 @@ function aiOkumaAc() {
         const eski = JSON.stringify(OKUMA.sorunlar || {});
         OKUMA.sorunlar = o.sorunlar || {};
         // Sayılar tıklanır: liste yalnız o sorunlulara süzülür
-        const suz = (filtre) => { OKUMA.filtre = filtre; raporOzeti(); tabloyuCiz(); };
+        const suz = (filtre) => { OKUMA.filtre = filtre; OKUMA.sayfa = 0; raporOzeti(); tabloyuCiz(); };
         const baglanti = (filtre, metin) => h("a", { href: "#", class: OKUMA.filtre === filtre ? "secili-suzgec" : "",
           onclick: (e) => { e.preventDefault(); suz(OKUMA.filtre === filtre ? "hepsi" : filtre); } }, metin);
         const nedenler = o.kategoriler.flatMap((k, i) => [i ? ", " : "", baglanti(k.kategori, `${k.sayi} ${k.ad.toLowerCase()}`)]);
@@ -2201,7 +2201,7 @@ function aiOkumaAc() {
               if (!g) return;
               g.cizYuklemeler();
               // Yüzlerce dosyada tabloyu her dosyada değil, arada bir ve en sonda yenile.
-              if (!OKUMA.bekleyen || Date.now() - OKUMA.cizZamani > 10000) { OKUMA.cizZamani = Date.now(); g.tabloyuCiz(); }
+              if (!OKUMA.bekleyen || Date.now() - OKUMA.cizZamani > 30000) { OKUMA.cizZamani = Date.now(); g.tabloyuCiz(); }
               if (!OKUMA.bekleyen) { g.raporOzeti(); g.redCiz(); }
             });
       }
@@ -2277,13 +2277,21 @@ function aiOkumaAc() {
             : (sorunlar[f.id] || []).some((x) => x.kategori === filtre));
         const islenemeyen = tumFaturalar.filter(sorunu).length;
         const sorunluSayisi = tumFaturalar.filter((f) => derece(f) < 2).length;
-        const suzgec = h("select", { onchange: (e) => { OKUMA.filtre = e.target.value; raporOzeti(); tabloyuCiz(); } },
+        const suzgec = h("select", { onchange: (e) => { OKUMA.filtre = e.target.value; OKUMA.sayfa = 0; raporOzeti(); tabloyuCiz(); } },
           [["hepsi", "Hepsi (sorunlular üstte)"], ["sorunlu", "Yalnız sorunlular"], ["sorunsuz", "Yalnız sorunsuzlar"],
             ...(!["hepsi", "sorunlu", "sorunsuz"].includes(filtre) ? [[filtre, "Seçilen sorun türü"]] : [])]
             .map(([d, m]) => h("option", { value: d, selected: d === filtre }, m)));
         const dovizMi = (f) => !["TRY", "TL"].includes(f.para_birimi || "TRY");
         const tutarPb = (f, x) => (dovizMi(f) ? `${para(x)} ${f.para_birimi}` : para(x));
-        const satirlar = faturalar.map((f) => {
+        // Binlerce taslakta bütün satırları çizmek sayfayı donduruyordu: 100'erli sayfalar
+        const SAYFA = 100, sayfaSayisi = Math.max(1, Math.ceil(faturalar.length / SAYFA));
+        OKUMA.sayfa = Math.min(OKUMA.sayfa || 0, sayfaSayisi - 1);
+        const sayfaDugmeleri = () => sayfaSayisi > 1 ? h("div", { class: "liste-ust" },
+          h("button", { class: "dugme", disabled: OKUMA.sayfa === 0, onclick: () => { OKUMA.sayfa--; tabloyuCiz(); } }, "◀ Önceki"),
+          h("span", {}, `${OKUMA.sayfa * SAYFA + 1}-${Math.min(faturalar.length, (OKUMA.sayfa + 1) * SAYFA)} / ${faturalar.length} fatura`),
+          h("button", { class: "dugme", disabled: OKUMA.sayfa >= sayfaSayisi - 1, onclick: () => { OKUMA.sayfa++; tabloyuCiz(); } }, "Sonraki ▶"),
+          h("span", {}, "Üstteki kutu bütün sayfaları seçer.")) : "";
+        const satirlar = faturalar.slice(OKUMA.sayfa * SAYFA, (OKUMA.sayfa + 1) * SAYFA).map((f) => {
           const sr = sorunu(f);
           const ou = uyarilar(f);
           const u = [...ou, ...(sr ? [] : (sorunlar[f.id] || []).map((x) => x.neden)
@@ -2322,12 +2330,14 @@ function aiOkumaAc() {
               h("button", { class: "dugme", onclick: () => indir(`/api/excel/fatura-uyarilari?yon=${yon}`, "fatura-uyari-raporu.xlsx") }, "Uyarı raporu (Excel)"),
               h("button", { class: "dugme", title: "Sorunlu faturaların ve okunamayan dosyaların belgeleri, nedenleri ve PDF dökümü tek ZIP",
                 onclick: () => indir("/api/faturalar/okuma-raporu", "okuma-hata-raporu.zip") }, "Okuma Hata Raporu (ZIP)")),
+            sayfaDugmeleri(),
             h("div", { class: "tablo-kap" }, h("table", { class: "liste kalemler-secim" },
               h("thead", {}, h("tr", {}, h("th", {}, tumu), ["Tarih", "Fatura No", "Cari", "Şantiye", "Gider Türü", "Kalem", "Ara Toplam", "KDV", "Genel Toplam", "Uyarı", ""]
                 .map((b, i) => h("th", { class: i >= 5 && i <= 8 ? "sayi" : "" }, b)))),
               h("tbody", {}, satirlar),
               h("tfoot", {}, h("tr", {}, h("td", { colspan: 7 }, "Seçilenlerin toplamı (TL)"), h("td", { class: "sayi" }, toplam("ara_toplam")),
                 h("td", { class: "sayi" }, toplam("kdv_toplam")), h("td", { class: "sayi" }, toplam("genel_toplam")), h("td", { colspan: 2 }))))),
+            sayfaDugmeleri(),
             h("p", { style: "margin:6px 0 0;color:#4a5866" }, "Kırmızı satırlar işlenemedi, sarı satırlarda uyarı var; uyarılar satırın sonunda yazar. Onaylamadan önce İncele ile bakın. Tüm uyarıları \"Uyarı raporu (Excel)\" ile indirebilirsiniz. Cari yoksa onayda faturadaki ünvan ve VKN ile açılır."))
             : h("p", {}, OKUMA.bekleyen ? "Faturalar okunuyor…" : "Onay bekleyen fatura yok. Dosyaları yukarıya bırakın."));
         sayacYaz();

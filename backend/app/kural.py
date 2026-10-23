@@ -594,7 +594,22 @@ def _zip_ac(veri: bytes, derinlik: int = 0) -> dict[str, bytes]:
 _BOLUNMUS_HARF = re.compile(r"(?<=[A-Za-zÇĞİÖŞÜçğıöşü]) [ÇĞİÖŞÜçğıöşü]{1,3} (?=[A-Za-zÇĞİÖŞÜçğıöşü])")
 
 
+_METIN_ONBELLEK: dict[str, str] = {}
+
+
 def pdf_metni(veri: bytes) -> str:
+    """PDF'in yazısı. Aynı belge bir yüklemede birkaç kez okunur (yön, taraflar, fatura): son belgeler bellekte tutulur."""
+    import hashlib
+    anahtar = hashlib.sha1(veri).hexdigest()
+    if anahtar not in _METIN_ONBELLEK:
+        metin = _pdf_metni(veri)
+        if len(_METIN_ONBELLEK) >= 16:
+            _METIN_ONBELLEK.pop(next(iter(_METIN_ONBELLEK)))
+        _METIN_ONBELLEK[anahtar] = metin
+    return _METIN_ONBELLEK[anahtar]
+
+
+def _pdf_metni(veri: bytes) -> str:
     from pypdf import PdfReader
     try:
         okuyucu = PdfReader(io.BytesIO(veri))
@@ -2172,7 +2187,9 @@ def tablo_satirlari(veri: bytes, mime: str) -> list[list]:
         wb = load_workbook(io.BytesIO(veri), read_only=True, data_only=True)
     except Exception as e:
         raise KuralHatasi("Excel dosyası okunamadı. Dosyayı .xlsx olarak kaydedip tekrar deneyin.") from e
-    return [list(r) for r in wb.worksheets[0].iter_rows(values_only=True)]
+    ws = wb.worksheets[0]
+    ws.reset_dimensions()  # Akbank dosyası boyutunu "A1" yazıyor: yalnız ilk satır okunuyordu
+    return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
 def _sutunlar(baslik: list) -> dict | None:
@@ -2302,7 +2319,7 @@ GENEL_KELIMELER = {"ltd", "sti", "as", "a.s", "a.s.", "san", "tic", "ins", "insa
                    "ticaret", "sanayi", "taahhut", "ith", "ihr", "pazarlama", "ltd.", "sti.", "san.", "tic.", "ins."}
 MASRAF_KELIMELERI = ["masraf", "komisyon", "bsmv", "ucret", "aidat", "kesinti", "faiz", "kkdf", "eft ucr", "havale ucr",
                      "gider vergisi", "kmh", "gayrinakdi", "ekspertiz", "degerli kagit", "sigorta prim", "police", "prim tahsil",
-                     "fonfz", "kred.mev.vergi", "kredi mevduat vergi"]
+                     "fonfz", "kred.mev.vergi", "kredi mevduat vergi", "arti para", "artipara", " kom."]
 VIRMAN_KELIMELERI = ["hesaplar arasi", "hesaplarim arasi", "hesaplar aras", "virman", "kendi hesab", "dbs hesab",
                      "hesabima transfer", "hesaba aktar", "vadeli h"]
 NAKIT_CEKIM = re.compile(r"nakit cek|para cek|atm.*cek|kasaya")
@@ -2513,6 +2530,26 @@ def _karsi_alan(aciklama: str, tutar: float) -> str | None:
     m = re.search(r"REF\s*NOLU\s+(.+?)\s+DBS\b", aciklama, re.IGNORECASE)
     if m:
         return m.group(1)
+    # Akbank: "7777/MBL-1234567-Örnek Enerji Ltd Şti-not", "7777/MBL-HAV.AD SOYAD-not" (kanal/işlem-[referans-]AD-not)
+    m = re.match(r"\s*\d{3,4}/[A-ZÇĞİÖŞÜ]{3}-(?:\d{5,}-)?(?:HAV\.|EFT\.)?([^-]{4,}?)\s*-", aciklama)
+    if m and not re.search(r"\d{3,}", m.group(1)):
+        return m.group(1)
+    # "EFT: GÖNDEREN ÜNVANI not", "FAST:GÖNDEREN not": önek sonrasındaki büyük harfli ad (şirket ekiyle bitiyorsa oraya kadar)
+    m = re.match(r"\s*(?:EFT|FAST|HAVALE|HVL)\s*:\s*(.+)", aciklama, re.IGNORECASE)
+    if m:
+        if ad := _serbest_unvan(m.group(1)):
+            return ad
+        kel = []
+        sozcukler = m.group(1).split()
+        # Ad büyük harfle yazılmışsa büyük harfli kelimeler, "Ad Soyad" yazılmışsa baş harfi büyük kelimeler alınır
+        buyuk = bool(sozcukler) and sozcukler[0] == tr_buyuk(sozcukler[0])
+        for w in sozcukler:
+            if not (re.search(r"[A-ZÇĞİÖŞÜ]", w) and (w == tr_buyuk(w) if buyuk else w[0] == tr_buyuk(w[0]))) or re.search(r"\d", w) \
+                    or re.match(r"(cari|hesab|mahsub|odeme|fatura|avans|bedel|kira|maas)", sade(w)):
+                break  # ad bitti, büyük harfle yazılmış not başladı ("CARİ HESABA MAHSUBEN")
+            kel.append(w)
+        if len(kel) >= 2:
+            return " ".join(kel)
     if "|" in aciklama:
         return re.sub(r"\s+DBS\s*$", "", aciklama.split("|")[-1].strip(), flags=re.IGNORECASE)
     if re.sub(r"\*{3,}", "", aciklama).count("*") >= 2:  # maskeli IBAN'daki yıldızlar ayıraç değildir
@@ -2524,7 +2561,7 @@ def _karsi_alan(aciklama: str, tutar: float) -> str | None:
     # Tutardaki ondalık virgülü ("112.913,34 USD") alan ayıracı sayılmaz
     parcalar = [p.strip() for p in re.sub(r"(?<=\d),(?=\d)", ".", aciklama).split(",")]
     if len(parcalar) < 2:
-        return None
+        return _serbest_unvan(aciklama)
     if tutar > 0:
         ad = re.split(r"\s*'\s*DAN\b|\s*/", parcalar[0], flags=re.IGNORECASE)[0]
         if ad and sade(parcalar[1]).startswith(sade(ad)[:10]):
@@ -2535,6 +2572,33 @@ def _karsi_alan(aciklama: str, tutar: float) -> str | None:
     if tutar > 0 and BANKA_ADI.search(sade(" ".join(parcalar[1:]))):
         return re.split(r"\s*'\s*DAN\b|\s*/", parcalar[0], flags=re.IGNORECASE)[0]
     return None
+
+
+_UNVAN_SONU = {"sirketi", "sti", "a.s", "a.s.", "as", "a.s.,", "ltd", "ltd.", "anonim", "limited", "kooperatifi", "ortakligi"}
+
+
+def _serbest_unvan(aciklama: str) -> str | None:
+    """Ayıraçsız açıklamada büyük harfle yazılmış, şirket ekiyle biten ünvan (Ziraat: "avans ÖRNEK ENERJİ İNŞ SAN VE T
+    ÖRNEK ENERJİ İNŞAAT SANAYİ VE TİCARET LİMİTED ŞİRKETİ Ziraat Mobil Havale"; Yapı Kredi: "Banka/IBAN-ÜNVAN/not").
+    Gönderen adı önce kesik, sonra tam yazılmışsa tam olanı alınır."""
+    kelimeler = re.split(r"[\s/|]+|(?<=\d)-", aciklama)
+    son = max((i for i, w in enumerate(kelimeler) if sade(w).strip(",") in _UNVAN_SONU
+               or re.fullmatch(r"sirk\w*", sade(w))), default=None)  # banka adı kesmiş olabilir: "LİMİTED ŞİRK"
+    if son is None:
+        return None
+    bas = son
+    while bas > 0 and (w := kelimeler[bas - 1]) and re.search(r"[A-ZÇĞİÖŞÜ]", w) and w == tr_buyuk(w) \
+            and not re.search(r"\d", w) and not BANKA_ADI.search(sade(w)):
+        bas -= 1
+    ad = kelimeler[bas:son + 1]
+    if sum(1 for w in ad if sade(w).strip(",.") not in _UNVAN_SONU) < 1 or len(re.sub(r"[^a-z]", "", sade(" ".join(ad)))) < 6:
+        return None
+    # Kesik + tam yazım: baştaki 2 kelime ileride yeniden başlıyorsa oradan al
+    for i in range(2, len(ad) - 2):
+        if [sade(w) for w in ad[i:i + 2]] == [sade(w) for w in ad[:2]]:
+            ad = ad[i:]
+            break
+    return " ".join(ad)
 
 
 def ekstre_kalibi(aciklama: str, tutar: float) -> str:

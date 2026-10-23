@@ -522,3 +522,5 @@ def baslangic():
 def kapanis():
     from . import bot
     bot.durdur()  # WhatsApp köprüsü programla birlikte kapanır
+    from . import islemci
+    islemci.kapat()  # PDF okuma işlemleri de

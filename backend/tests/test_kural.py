@@ -1590,3 +1590,44 @@ def test_bosluklu_ve_bitisik_vkn_okunur():
 def test_alt_alta_kdv_etiketleri_tutarlariyla_eslesir():
     metin = kural._alt_alta_etiketler("Hesaplanan KDV %1\nHesaplanan KDV %10\n0,20 TRY\n80,00 TRY\nOdenecek Tutar 900,20")
     assert metin.splitlines()[:2] == ["Hesaplanan KDV %1 0,20 TRY", "Hesaplanan KDV %10 80,00 TRY"]
+
+
+def test_ekstre_serbest_aciklamadaki_unvan():
+    """Ayıraçsız açıklamada şirket ekiyle biten büyük harfli ünvan (kesik + tam yazılmışsa tamı), Akbank kanal düzeni
+    ve "EFT:/FAST:" önekli gönderen adı karşı taraf olur; firmamızın adı virmandır."""
+    ka = kural._karsi_alan
+    assert ka("avans ORNEK ENERJİ İNŞAAT SANAYİ VE T ORNEK ENERJİ İNŞAAT SANAYİ VE TİCARET LİMİTED ŞİRKETİ Ziraat Mobil Havale",
+              5000) == "ORNEK ENERJİ İNŞAAT SANAYİ VE TİCARET LİMİTED ŞİRKETİ"
+    assert ka("7777/MBL-1234567-Deneme Yapi Limited Sirketi-Deneme cari odeme", -100) == "Deneme Yapi Limited Sirketi"
+    assert ka("7777/MBL-HAV.ALİ VELİ-Eylul ayi maas odemesi", -100) == "ALİ VELİ"
+    assert ka("7777/MBL-Kredi Kartı Ödeme", -100) is None
+    assert ka("FAST:ORNEK MESKEN İNŞAAT VE MALZEME CARİ HESABA MAHSUBEN", 100) == "ORNEK MESKEN İNŞAAT VE MALZEME"
+    assert ka("EFT: ORNEK MÜHENDİSLİK TİCARET LİMİTED ŞİRK cari ödeme", 100) == "ORNEK MÜHENDİSLİK TİCARET LİMİTED ŞİRK"
+    assert ka("FAST:Ali Veli Yılmaz", 100) == "Ali Veli Yılmaz"
+    assert kural.tur_tahmin(-100, "7777/MBL-1234567-Afsa Grup Enerji Limited Sirket-Afsa akbank", None, ["afsa"]) == "virman"
+    assert kural.tur_tahmin(-184, "Artı Para Vergi", None, ["afsa"]) == "banka_masrafi"
+
+
+def test_ekstre_excel_boyutu_yanlis_yazilmis():
+    """Bazı bankaların Excel'i boyutunu 'A1' yazar; salt okunur açılışta yalnız ilk satır gelmesin."""
+    import re as _re
+    import zipfile
+    wb = Workbook()
+    ws = wb.active
+    for r in [["Vadesiz Hesap Hareketleriniz"], ["IBAN", "TR00 0000 0000 0000 0000 0000 01"], [],
+              ["Tarih", "Saat", "Tutar", "Bakiye", "Borç/Alacak", "Açıklama"],
+              ["01.10.2026", "10:00", -50.0, 950.0, "B", "7777/MBL-EFT KOMİSYONU"],
+              ["02.10.2026", "11:00", 200.0, 1150.0, "A", "FAST:ORNEK YAPI LİMİTED ŞİRKETİ cari"]]:
+        ws.append(r)
+    t = io.BytesIO()
+    wb.save(t)
+    giris, cikis = zipfile.ZipFile(io.BytesIO(t.getvalue())), io.BytesIO()
+    with zipfile.ZipFile(cikis, "w") as z:
+        for ad in giris.namelist():
+            v = giris.read(ad)
+            if ad.endswith("sheet1.xml"):
+                v = _re.sub(rb'<dimension ref="[^"]*"/>', b'<dimension ref="A1"/>', v)
+            z.writestr(ad, v)
+    r = kural.ekstre_kural_oku(cikis.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", [], "DENEME")
+    assert [(s["tutar"], s["onerilen_tur"]) for s in r["satirlar"]] == [(-50.0, "banka_masrafi"), (200.0, "tahsilat")]
+    assert r["satirlar"][1]["onerilen_cari"]["unvan"] == "ORNEK YAPI LİMİTED ŞİRKETİ"
