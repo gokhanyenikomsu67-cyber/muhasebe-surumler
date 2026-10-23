@@ -119,3 +119,14 @@ def test_yetkisiz_bolum_gosterilmez():
     assert "Gebze Fabrika" in _sor(sh, "gebze harcama")
     # Numaraları yalnız sahip yönetir
     assert client.get("/api/bot/numaralar", headers=sh).status_code == 403
+
+
+def test_npm_hatasi_kisa_ve_turkce():
+    cikti = ("npm notice New major version of npm available! 11.19.1 -> 12.2.1\nnpm error code 1\n"
+             "npm error path C:\\x\\node_modules\\baileys\nnpm error command failed\n"
+             "npm error command C:\\Windows\\system32\\cmd.exe /d /s /c node ./engine-requirements.js\n"
+             "npm error 'node' is not recognized as an internal or external command,\n"
+             "npm error A complete log of this run can be found in: C:\\x.log")
+    h = bot.npm_hatasi(cikti)
+    assert "notice" not in h and "complete log" not in h and "not recognized" in h
+    assert bot.npm_hatasi("npm error code ENOTFOUND\nnpm error network request failed").startswith("İnternete ulaşılamadı")

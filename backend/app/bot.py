@@ -67,6 +67,25 @@ def kurulu_mu() -> bool:
     return bool(node_yolu()) and (KOPRU_KLASORU / "node_modules" / "baileys").exists()
 
 
+def _ortam(node: str) -> dict:
+    """Node.js programla aynı oturumda yeni kurulduysa yolu bu sürecin PATH'inde yoktur; npm'in çalıştırdığı 'node'
+    komutu da bulunsun diye Node klasörü PATH'in başına eklenir."""
+    return {**os.environ, "PATH": str(Path(node).parent) + os.pathsep + os.environ.get("PATH", ""),
+            "NO_UPDATE_NOTIFIER": "1", "npm_config_update_notifier": "false"}
+
+
+def npm_hatasi(cikti: str) -> str:
+    """npm çıktısından asıl hata (notice satırları ve log yolu atılır), kısa ve Türkçe."""
+    satirlar = [x.removeprefix("npm error").strip() for x in cikti.splitlines() if x.startswith("npm error")]
+    satirlar = [x for x in satirlar if x and "complete log" not in x and not x.startswith(("A complete", "code ", "path ", "command "))]
+    metin = " ".join(satirlar)[-200:]
+    if re.search(r"ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|network", cikti, re.I):
+        return "İnternete ulaşılamadı. Bağlantıyı kontrol edip tekrar deneyin."
+    if re.search(r"EPERM|EBUSY|EACCES", cikti):
+        return "Dosyalar kullanımda ya da yazılamıyor. Programı kapatıp açın, sonra tekrar deneyin."
+    return metin or "Bilinmeyen hata."
+
+
 def _npm(node: str) -> list[str]:
     npm = Path(node).parent / ("npm.cmd" if os.name == "nt" else "npm")
     return [str(npm) if npm.exists() else (shutil.which("npm") or "npm")]
@@ -85,10 +104,15 @@ def kur() -> None:
         node = node_yolu()
         if not node:
             raise RuntimeError("Node.js kurulamadı. İnternet bağlantısını kontrol edip tekrar deneyin.")
-        sonuc = subprocess.run([*_npm(node), "ci", "--omit=dev", "--no-audit", "--no-fund"], cwd=KOPRU_KLASORU,
-                               capture_output=True, text=True, timeout=1800, creationflags=gizli)
+        # Paketlerin kurulum betikleri gerekmez (yalnız Node sürümü denetimi); atlanınca Windows'ta daha az şey bozulur
+        sonuc = subprocess.run([*_npm(node), "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
+                               cwd=KOPRU_KLASORU, env=_ortam(node), capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=1800, creationflags=gizli)
         if sonuc.returncode or not kurulu_mu():
-            raise RuntimeError("Paketler kurulamadı: " + (sonuc.stderr or sonuc.stdout or "")[-300:])
+            cikti = (sonuc.stderr or "") + "\n" + (sonuc.stdout or "")
+            with open(VERI_KLASORU / "whatsapp-gunlugu.txt", "a", encoding="utf-8") as g:
+                g.write(f"--- Kurulum hatası {time.strftime('%Y-%m-%d %H:%M')}\n{cikti}\n")
+            raise RuntimeError("Paketler kurulamadı: " + npm_hatasi(cikti))
         KURULUM.update(durum="bitti", hata=None)
     except (OSError, subprocess.TimeoutExpired, RuntimeError) as e:
         KURULUM.update(durum="hata", hata=str(e))
@@ -103,7 +127,7 @@ def baslat() -> None:
             DURUM.update(durum="kurulu_degil", qr=None)
             return
         OTURUM.mkdir(parents=True, exist_ok=True)
-        ortam = {**os.environ, "MUHASEBE_ADRES": ANA_ADRES, "MUHASEBE_BOT_ANAHTARI": ANAHTAR, "BOT_OTURUM": str(OTURUM)}
+        ortam = {**_ortam(node), "MUHASEBE_ADRES": ANA_ADRES, "MUHASEBE_BOT_ANAHTARI": ANAHTAR, "BOT_OTURUM": str(OTURUM)}
         gunluk = open(VERI_KLASORU / "whatsapp-gunlugu.txt", "a", encoding="utf-8")
         _SUREC["p"] = subprocess.Popen([node, str(KOPRU_KLASORU / "kopru.mjs")], cwd=KOPRU_KLASORU, env=ortam,
                                        stdout=gunluk, stderr=gunluk, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
