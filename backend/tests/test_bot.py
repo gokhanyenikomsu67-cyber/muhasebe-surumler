@@ -119,7 +119,9 @@ def test_kopru_yalniz_kayitli_numaraya_cevap_verir():
                                                                    "hitap": True}).json()["cevap"]
         c = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "@123456789 kaç para ödenmemiş çek var",
                                                     "hitap": True}).json()["cevap"]
-        assert "600,00 TL" in c and "4.000,00 TL" not in c, c
+        assert "Ödenecek (verdiğimiz): 1 çek, *600,00 TL*" in c and "Tahsil edilecek (aldığımız): 1 çek, *4.000,00 TL*" in c, c
+        c = client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "Kaç para ödenmiş çek var"}).json()["cevap"]
+        assert "Ödenmiş çekler" in c and "Bu ay" in c and "Bu yıl" in c, c
         assert client.post(yol, headers=anahtar, json={"gonderen": "99887766@lid", "metin": "tamam teşekkürler"}).json()["cevap"] is None
         # Ekranda son gelenler: kim, ne yazdı, ne yapıldı
         son = bot.MESAJLAR[-2:]

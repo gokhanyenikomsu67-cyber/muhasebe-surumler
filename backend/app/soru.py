@@ -34,7 +34,8 @@ harcamalari harcanan gider gideri giderleri gelir geliri toplam toplami bu ay ay
 cek cekler cekleri ceki senet senetler banka bankalar kasa hesap hesaplar ve ile mi mu kac para tl son durum durumu var
 lutfen bot muhasebe soyle goster ver yaz bana bize acaba icin olan olarak tum hepsi butun genel ozet vade vadesi gelen
 gelecek odenecek odeyecegimiz alinan verilen tahsil kalan nedir kadardir simdiye simdiki su an anki
-odenmemis odenmeyen tahsil edilmemis edilmeyen bekleyen kac tane adet listesi liste
+odenmemis odenmeyen tahsil edilmemis edilmeyen bekleyen kac tane adet listesi liste odenmis odenen odedigimiz odendi
+edilmis edilen toplami hangi hangileri
 """.split()) | set(AYLAR)
 
 
@@ -169,13 +170,41 @@ def banka_cevabi(db: Session, k: Kullanici) -> str:
     return "*Banka ve kasa bakiyeleri*\n" + "\n".join(satirlar) + alt
 
 
+def ozet_mi(w: list[str]) -> bool:
+    """Toplam mı soruluyor ("kaç para", "toplam", "ne kadar") — liste istenmediyse."""
+    return bool(set(w) & {"kac", "toplam", "toplami", "kadar"}) and not set(w) & {"liste", "listesi", "hangi", "hangileri"}
+
+
+def odenmis_mi(w: list[str]) -> bool:
+    """Ödenmiş / tahsil edilmiş çekler mi soruluyor ("ödenmemiş" ile karışmaz)."""
+    return bool(set(w) & {"odenmis", "odenen", "odedigimiz", "odendi", "tahsil edilmis", "edilmis", "edilen", "tahsil edilen"}) \
+        and not set(w) & {"odenmemis", "odenmeyen", "edilmemis", "edilmeyen"}
+
+
+def odenmis_cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None = None) -> str:
+    """Ödenen (verilen) ve tahsil edilen (alınan) çeklerin toplamı: sorulan dönem, yoksa bu ay ve bu yıl."""
+    bas, bit, etiket = donem(s, bugun)
+    donemler = [(bas, bit, etiket)] if bas else [(bugun.replace(day=1), bugun, "bu ay"), (date(bugun.year, 1, 1), bugun, "bu yıl")]
+    q = select(Cek).where(Cek.sirket_id == k.sirket_id, Cek.durum.in_(("odendi", "tahsil_edildi")))
+    if cari:
+        q = q.where(Cek.cari_id == cari.id)
+    cekler = list(db.scalars(q))
+    satirlar = ["*Ödenmiş çekler*" + (f" — {cari.unvan}" if cari else "")]
+    for b, e, ad in donemler:
+        satirlar.append(f"_{ad.capitalize()}:_")
+        for durum, yazi in (("odendi", "Ödediğimiz"), ("tahsil_edildi", "Tahsil ettiğimiz")):
+            liste = [c for c in cekler if c.durum == durum and b <= (c.islem_tarihi or c.vade) <= e]
+            satirlar.append(f"{yazi}: {len(liste)} çek, *{para(sum(float(c.tutar) for c in liste))}*")
+    return "\n".join(satirlar)
+
+
 def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None = None) -> str:
     w = _kelimeler(s)
     q = select(Cek).where(Cek.sirket_id == k.sirket_id, Cek.durum.in_(ACIK_CEK_DURUMLARI))
     if cari:
         q = q.where(Cek.cari_id == cari.id)
     yon = None
-    if any(x in w for x in ("verilen", "odenecek", "odeyecegimiz", "odeme", "verdigimiz", "kestigimiz", "odenmemis", "odenmeyen")):
+    if any(x in w for x in ("verilen", "odenecek", "odeyecegimiz", "odeme", "verdigimiz", "kestigimiz")):
         yon = "verilen"
     elif any(x in w for x in ("alinan", "aldigimiz", "tahsil", "portfoy", "portfoydeki", "musteri")):
         yon = "alinan"
@@ -199,6 +228,15 @@ def cek_cevabi(db: Session, k: Kullanici, s: str, bugun: date, cari: Cari | None
     if bit:
         q = q.where(Cek.vade <= bit)
     cekler = list(db.scalars(q.order_by(Cek.vade, Cek.id)))
+    if ozet_mi(w):  # "kaç para ödenmemiş çek var": yalnız toplamlar
+        satirlar = ["*Ödenmemiş çekler*" + (f" — {cari.unvan}" if cari else "") + (f" ({etiket})" if etiket and etiket != "tümü" else "")]
+        for y, ad in (("verilen", "Ödenecek (verdiğimiz)"), ("alinan", "Tahsil edilecek (aldığımız)")):
+            liste = [c for c in cekler if c.yon == y]
+            if yon in (None, y):
+                satirlar.append(f"{ad}: {len(liste)} çek, *{para(sum(float(c.tutar) for c in liste))}*"
+                                + (f" (en yakın vade {gun_ay(liste[0].vade)})" if liste else ""))
+        satirlar.append("_Liste için \"ödenecek çek listesi\" ya da \"bu ay çekler\" yazın._")
+        return "\n".join(satirlar)
     baslik = "*Açık çekler*" + (f" — {cari.unvan}" if cari else "") + (f" ({etiket})" if etiket else "")
     if not cekler:
         return baslik + "\nKayıt yok."
@@ -363,6 +401,8 @@ def cevapla(db: Session, k: Kullanici, metin: str, bugun: date | None = None, so
         bulunan = cari_bul()
         if len(bulunan) > 1:
             return _hangisi("firma", [c.unvan for c in bulunan])
+        if odenmis_mi(w):
+            return odenmis_cek_cevabi(db, k, s, bugun, bulunan[0] if bulunan else None)
         return cek_cevabi(db, k, s, bugun, bulunan[0] if bulunan else None)
 
     s_bulunan = ad_bul(s, santiyeler) if not cari_kelimesi or santiye_kelimesi else []
